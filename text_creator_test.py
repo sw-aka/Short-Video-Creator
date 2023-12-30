@@ -5,6 +5,7 @@ def create_image(text, font_path, font_size, max_width):
     image = Image.new("RGBA", (max_width, 1000), (0,0,0,0))
     draw = ImageDraw.Draw(image)
 
+    text_max_width = max_width - 10
     # Load the font
     font = ImageFont.truetype(font_path, font_size)
 
@@ -19,14 +20,14 @@ def create_image(text, font_path, font_size, max_width):
         # Check if adding the next word exceeds the max width
         text_width = draw.textlength(current_line + " " + word, font)
         text_height = font_size
-        if text_width <= max_width:
+        if text_width <= text_max_width:
             # If not, add the word to the current line
             if current_line:
                 current_line += " "
             current_line += word
         else:
             # Calculate the X-position to center the text
-            x_position = (max_width - draw.textlength(current_line, font)) // 2
+            x_position = (text_max_width - draw.textlength(current_line, font)) // 2
             # Draw the current line at the calculated position
             draw.text((x_position, y_position), current_line, font=font, fill="white", stroke_width=5, stroke_fill='black')
             y_position += text_height
@@ -45,9 +46,9 @@ def create_image(text, font_path, font_size, max_width):
     # image.show()
 
 # Example usage
-text = "This is an example text that should be wrapped to fit within a specified max width."
+text = "WThis is an example text that should be wrapped to fit within a specified max width."
 font_path = "LuckiestGuy.ttf"  # Replace with the path to your font file
-font_size = 50
-max_width = 900
+font_size = 40
+max_width = 500
 
 create_image(text, font_path, font_size, max_width)
