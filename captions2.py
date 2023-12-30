@@ -7,14 +7,25 @@ captions = [
     {'timestamp': (13.0, 16.0), 'text': " Oh, we all look alike, do we? Well look who's talking!"}
 ]
 
+captions = [{'timestamp': (0.0, 0.84), 'text': " It's no over."}, 
+    {'timestamp': (0.84, 2.1), 'text': ' I take picture of Ang Lee.'}, 
+    {'timestamp': (2.1, 2.52), 'text': ' Good.'}, 
+    {'timestamp': (2.52, 4.5), 'text': ' He do too many white people movie anyway.'}, 
+    {'timestamp': (8.0, 9.52), 'text': ' You no come back ever.'}, 
+    {'timestamp': (9.52, 11.0), 'text': ' I no like you American.'}, 
+    {'timestamp': (11.0, 13.0), 'text': ' And all you American look alike.'}, 
+    {'timestamp': (13.0, 14.76), 'text': ' Oh, we all look alike, do we?'}, 
+    {'timestamp': (14.76, 16.94), 'text': " Well, look who's talking."}
+]
+
 from moviepy.editor import VideoFileClip, TextClip, concatenate_videoclips, CompositeVideoClip
 
 def add_captions(input_video, output_video, captions):
     video_clip = VideoFileClip(input_video)
 
     # Function to add text to a subclip
-    def add_text(subclip, txt, fontsize=24, color='white', bg_color='black'):
-        txt_clip = TextClip(txt, fontsize=fontsize, color=color, bg_color=bg_color, font='Discovery.ttf')
+    def add_text(subclip, txt, fontsize=24, color='white', bg_color='transparent'):
+        txt_clip = TextClip(txt, fontsize=fontsize, bg_color=bg_color, font='Discovery.ttf')
         txt_clip = txt_clip.set_pos('center').set_duration(subclip.duration)
         return CompositeVideoClip([subclip, txt_clip])
 

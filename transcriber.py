@@ -5,7 +5,7 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
 # Replace 'path/to/local/model' with the actual path to the directory containing the model files
-local_model_path = 'whisper-medium.en'
+local_model_path = 'whisper-large-v3'
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
     local_model_path,  # Provide the path to the local directory
