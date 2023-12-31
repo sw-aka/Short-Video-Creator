@@ -2,4 +2,5 @@
 *.mp3
 *.ttf
 *.png
+*.txt
 /whisper-large-v3

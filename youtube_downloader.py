@@ -3,7 +3,7 @@ from pytube import YouTube
 def download_video(url, resolution='1280x720'):
     try:
         # Create a YouTube object
-        yt = YouTube(url)
+        yt = YouTube(url,  use_oauth=False, allow_oauth_cache=True)
 
         # print(yt.streams)
         # for stream in yt.streams:
@@ -24,7 +24,7 @@ def download_video(url, resolution='1280x720'):
 
 if __name__ == "__main__":
     # Example URL
-    video_url = 'https://www.youtube.com/watch?v=VIDEO_ID'
-
+    # video_url = 'https://www.youtube.com/watch?v=VIDEO_ID'
+    video_url = input("Enter video url: ")
     # Call the download_video function with the desired resolution
     download_video(video_url, resolution='1280x720')

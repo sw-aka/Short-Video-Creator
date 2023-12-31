@@ -14,12 +14,13 @@ import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
-
-
+import concurrent.futures
+import multiprocessing
 
 
 INPUT_VIDEOS_PATH = 'input_videos'
 OUTPUT_VIDEOS_PATH = 'output_videos'
+TIMESTAMPS_PATH = 'timestamps.txt'
 
 class Video:
 
@@ -43,6 +44,50 @@ class Video:
         # Apply the cropping
         return crop(clip, x1=crop_x, x2=clip.size[0]-crop_x, y1=crop_y, y2=clip.size[1]-crop_y)
 
+class ProcessMultiClipVideo:
+
+    def __init__(self, input_path, timestamps) -> None:
+        self.original_path = input_path
+
+        # original_video = VideoFileClip(self.original_path)
+
+        # for timestamp_pair in timestamps:
+        #     ProcessVideo(original_video.subclip(timestamp_pair[0], timestamp_pair[1]))
+        
+        args_list = []
+        for timestamp_pair in timestamps[4:]:
+            print(timestamp_pair)
+            self.process_video_wrapper((self.original_path, timestamp_pair,))
+            # args_list.append((self.original_path, timestamp_pair))
+
+        # Use ThreadPoolExecutor to run the function with a pool of 5 threads
+        # with multiprocessing.Pool(processes=2) as pool:
+        #     pool.map(self.process_video_wrapper, args_list)
+
+        # pool.close()
+        # pool.join()
+
+        # original_video.close()
+
+    def process_video_wrapper(self, args):
+        input_dir, timestamp_pair = args
+
+        if not 5 < timestamp_pair[1] - timestamp_pair[0] < 60:
+            return
+        
+        original_video = VideoFileClip(input_dir)
+        
+        # try:
+        ProcessVideo(original_video.subclip(timestamp_pair[0], timestamp_pair[1]))
+        # except:
+        #     print('An error occured.')
+        
+        original_video.close()
+
+
+    
+
+
 class ProcessVideo:
 
     CLIP_ASPECT_RATIO = 9 / 6
@@ -54,22 +99,31 @@ class ProcessVideo:
 
     OUTPUT_RESOLUTION = (540, 960)
 
-    def __init__(self, input_path):
-        self.original_path = input_path
+    def __init__(self, clip):
+
         self.create_working_directory()
-        self.copy_video_to_working_dir()
+
+        print(clip.duration)
+        clip.write_videofile(os.path.join(self.working_dir, 'input.mp4'), codec="libx264", audio_codec="aac", fps=clip.fps)
+        clip.close()
+
+        self.input_dir = os.path.join(self.working_dir, 'input.mp4')
 
         self.extract_audio()
 
         clip = self.crop_input_video()
         background_clip = self.get_background_clip(clip.duration)
-
+        print(f"Backgound clip duration: {background_clip.duration}")
         stacked_video = self.stack_clips(clip, background_clip)
-
+        print(f"Stacked video duration: {stacked_video.duration}")
         transcription = self.transcribe_audio()
 
         self.add_captions_to_video(stacked_video, transcription)
 
+        clip.close()
+        background_clip.close()
+        stacked_video.close()
+        
         self.copy_to_output_and_delete()
 
         
@@ -81,10 +135,6 @@ class ProcessVideo:
         os.makedirs(f'working_directory/{unique_id}', exist_ok=True)
 
         self.working_dir = f'working_directory/{unique_id}'
-    
-    def copy_video_to_working_dir(self):
-        shutil.copy(self.original_path, os.path.join(self.working_dir, 'input.mp4'))
-        self.input_dir = os.path.join(self.working_dir, 'input.mp4')
     
     def extract_audio(self):
         self.audio_path = os.path.join(self.working_dir, 'audio.mp3')
@@ -100,7 +150,6 @@ class ProcessVideo:
     def crop_input_video(self) -> VideoFileClip:
         # Load the video clip
         video_clip = VideoFileClip(self.input_dir)
-
         cropped_clip = Video.crop_to_aspect_ratio(video_clip, self.CLIP_ASPECT_RATIO)
         resized_clip = cropped_clip.resize(self.CLIP_RESOLUTION)
         return resized_clip
@@ -108,7 +157,7 @@ class ProcessVideo:
         # Write the output video file
         # cropped_clip.write_videofile(output_path, codec='libx264', audio_codec='aac')
     
-    def get_background_clip(self, duration):
+    def get_background_clip(self, duration) -> VideoFileClip:
     
         background_video = VideoFileClip('background.mp4')
         start_pos = random.randint(0, int(background_video.duration - duration))
@@ -182,7 +231,7 @@ class ProcessVideo:
             current_line = ""
             y_position = 10
 
-            text_max_width = max_width - 10
+            text_max_width = max_width - 50
 
             for word in words:
                 # Check if adding the next word exceeds the max width
@@ -211,6 +260,8 @@ class ProcessVideo:
             # return image
             image.save('text.png')
 
+            image.close()
+
         # Function to add text to a subclip
         def add_text(subclip, txt, fontsize=24, color='white', bg_color='transparent'):
 
@@ -229,22 +280,36 @@ class ProcessVideo:
 
             # Combine the subclip and the centered image
             final_clip = CompositeVideoClip([subclip, video_clip])
+
+            image_clip.close()
+            centered_image_clip.close()
+
             return final_clip
         
 
-        # Function to add captions to the video
-        def add_captions_to_video(clip, caption):
-            start, end = caption['timestamp']
-            caption_text = caption['text']
-            subclip = clip.subclip(start, end)
-            return add_text(subclip, caption_text)
+        caption_clips = []
+        last_clip_end = 0
+        for item in captions:
+            start, end = item['timestamp']
+            text = item['text'].strip()
 
-        # Add captions to the video
-        caption_clips = [add_captions_to_video(video_clip, caption) for caption in captions]
+            gap = start - last_clip_end
+            if gap > 0:
+                caption_clips.append(video_clip.subclip(last_clip_end, start))
+
+            caption_clips.append(add_text(video_clip.subclip(start, end), text))
+            last_clip_end = end
         
+        if last_clip_end is not None and last_clip_end + 0.1 < video_clip.duration:
+            caption_clips.append(video_clip.subclip(last_clip_end, video_clip.duration))
+        # Add captions to the video
+            
         # Concatenate the caption clips
-        final_clip = concatenate_videoclips(caption_clips)
-
+        if len(caption_clips) > 0:
+            final_clip = concatenate_videoclips(caption_clips)
+        else:
+            final_clip = video_clip
+        print(f"Final clip duration: {final_clip.duration}")
         self.output_path = os.path.join(self.working_dir, 'output.mp4')
         # Write the result to a file
         final_clip.write_videofile(self.output_path, codec="libx264", audio_codec="aac", fps=video_clip.fps)
@@ -263,7 +328,6 @@ class ProcessVideo:
             time.sleep(0.1)
         shutil.copy(self.output_path, os.path.join(OUTPUT_VIDEOS_PATH, f'video_{formatted_datetime}.mp4'))
         shutil.rmtree(self.working_dir)
-        # os.remove(self.original_path)
 
 def get_input_video_paths():
     if os.path.exists(INPUT_VIDEOS_PATH):
@@ -272,15 +336,141 @@ def get_input_video_paths():
         return []
 
 
+class Timestamps:
+
+    def __init__(self):
+        
+        with open(TIMESTAMPS_PATH, 'w') as f:
+            f.write('')
+
+        file = open(TIMESTAMPS_PATH, 'a')
+
+        input_files = os.listdir(INPUT_VIDEOS_PATH)
+
+        for file_name in input_files:
+            black_frames = self.find_black_frames(os.path.join(INPUT_VIDEOS_PATH, file_name))
+
+            timestamps_string = ''
+            for pos, (start, end) in enumerate(black_frames):
+                if pos == 0:
+                    continue
+
+                if black_frames[pos][0] < 5:
+                    continue
+                
+                timestamps_string += f"{black_frames[pos-1][1] + 0.02 :.2f}:{black_frames[pos][0] :.2f},"
+                
+            timestamps_string = timestamps_string.rstrip(',')
+
+            file.write(f"{file_name}\n")
+            file.write(f"{timestamps_string}\n")
+        
+        file.close()
+    
+    def find_black_frames(self, video_path, threshold=10, fps=30):
+        """
+        Find black frames in a video and return their timestamps.
+
+        Parameters:
+        - video_path: str, path to the video file
+        - threshold: int, threshold for considering a frame as black (0-255)
+        - fps: int, frames per second of the video
+
+        Returns:
+        - black_frames: list of tuples, each tuple contains the start and end timestamps of a black frame
+        """
+
+        # Load the video clip
+        video_clip = VideoFileClip(video_path)
+
+        # Initialize variables
+        black_frames = []
+        frame_duration = 1 / fps
+        is_black_frame = False
+        start_time = 0
+
+        # Iterate through each frame
+        for i, frame in enumerate(video_clip.iter_frames(fps=fps, dtype='uint8')):
+
+            if i * frame_duration < 5:
+                continue
+            
+            # Check if the frame is black based on the threshold
+            is_black = frame.mean() < threshold
+
+            # If the frame is black and we are not already in a black frame
+            if is_black and not is_black_frame:
+                is_black_frame = True
+                start_time = i * frame_duration
+            # If the frame is not black and we are in a black frame
+            elif not is_black and is_black_frame:
+                is_black_frame = False
+                end_time = i * frame_duration
+                black_frames.append((start_time, end_time))
+
+        # Check for the last black frame
+        if is_black_frame:
+            end_time = video_clip.duration
+            black_frames.append((start_time, end_time))
+
+        return black_frames
+
+
+
+def get_timestamps():
+
+    Timestamps()
+
+    if os.path.exists(TIMESTAMPS_PATH):
+        with open(TIMESTAMPS_PATH, 'r') as f:
+            lines = f.readlines()
+
+        timestmaps = {}
+        name = ''
+        for pos, line in enumerate(lines):
+            line = line.strip()
+            if pos % 2 == 0:
+                name = line
+                continue
+            else:
+                pairs = []
+                timestamp_pairs = line.split(',')
+                for pair in timestamp_pairs:
+                    start, end = pair.split(':')
+                    pairs.append((float(start),float(end),))
+                timestmaps[os.path.join(INPUT_VIDEOS_PATH, name)] = pairs
+        
+        return timestmaps
+    else:
+        return {}
+
+
 def main():
 
     input_video_paths = get_input_video_paths()
+    timestamps =  get_timestamps()
+
+    
 
     for input_video_path in input_video_paths:
-        ProcessVideo(input_video_path)
+        timestamp = None
+        if input_video_path in timestamps:
+            timestamp = timestamps[input_video_path]
+            ProcessMultiClipVideo(input_video_path, timestamp)
+        
+        # ProcessVideo(input_video_path, timestamp)
 
+    # args_list = []
+    # for input_video_path in input_video_paths:
+    #     timestamp = timestamps.get(input_video_path, None)
+    #     args_list.append((input_video_path, timestamp))
 
-    pass
+    # # Use ThreadPoolExecutor to run the function with a pool of 5 threads
+    # with multiprocessing.Pool(processes=5) as pool:
+    #     pool.map(process_video_wrapper, args_list)
+
+    # pool.close()
+    # pool.join()
 
 if __name__ == '__main__':
     main()
