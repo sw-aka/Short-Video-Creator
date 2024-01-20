@@ -258,7 +258,7 @@ class ProcessVideo:
             # Crop the image to the actual content size
             image = image.crop((0, 0, max_width, y_position + text_height + 100))
             # return image
-            image.save('text.png')
+            image.save(os.path.join(self.working_dir, 'text.png'))
 
             image.close()
 
@@ -271,7 +271,7 @@ class ProcessVideo:
 
             create_image(txt, font_path, font_size, max_width)
 
-            image_clip = ImageSequenceClip(['text.png'], fps=24)  # Adjust fps as needed
+            image_clip = ImageSequenceClip([os.path.join(self.working_dir, 'text.png')], fps=24)  # Adjust fps as needed
 
             centered_image_clip = image_clip.set_position(("center", "center"))
 
@@ -348,6 +348,7 @@ class Timestamps:
         input_files = os.listdir(INPUT_VIDEOS_PATH)
 
         for file_name in input_files:
+            print(f"Loading timestamps for: {file_name}")
             black_frames = self.find_black_frames(os.path.join(INPUT_VIDEOS_PATH, file_name))
 
             timestamps_string = ''
