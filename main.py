@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
 import concurrent.futures
 import multiprocessing
+import whisper_timestamped as whisper
 
 
 INPUT_VIDEOS_PATH = 'input_videos'
@@ -176,41 +177,28 @@ class ProcessVideo:
         return final_clip.resize(self.OUTPUT_RESOLUTION)
     
     def transcribe_audio(self):
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
         # Replace 'path/to/local/model' with the actual path to the directory containing the model files
         local_model_path = 'whisper-large-v3'
 
-        model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            local_model_path,  # Provide the path to the local directory
-            torch_dtype=torch_dtype,
-            low_cpu_mem_usage=True,
-            use_safetensors=True,
-            local_files_only=True
-        )
-        model.to(device)
-
-        processor = AutoProcessor.from_pretrained(local_model_path)
-
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=model,
-            tokenizer=processor.tokenizer,
-            feature_extractor=processor.feature_extractor,
-            max_new_tokens=128,
-            chunk_length_s=30,
-            batch_size=16,
-            return_timestamps=True,
-            torch_dtype=torch_dtype,
-            device=device,
-        )
-
         sample = self.audio_path
-        result = pipe(sample)
+
+        audio = whisper.load_audio(sample)
+
+        model = whisper.load_model(local_model_path, device="cpu")
+
+        result = whisper.transcribe(model, audio, language="en")
+
+        output = []
+        for segment in result['segments']:
+            for word in segment['words']:
+                output.append({
+                    'timestamp': (word['start'], word['end']),
+                    'text': word['text']
+                })
 
 
-        return result['chunks']
+        return output
     
     def add_captions_to_video(self, stacked_video, captions):
         video_clip = stacked_video
@@ -292,6 +280,9 @@ class ProcessVideo:
         for item in captions:
             start, end = item['timestamp']
             text = item['text'].strip()
+
+            if start > video_clip.duration or end > video_clip.duration:
+                continue
 
             gap = start - last_clip_end
             if gap > 0:
@@ -420,7 +411,7 @@ class Timestamps:
 
 def get_timestamps():
 
-    Timestamps()
+    #Timestamps()
 
     if os.path.exists(TIMESTAMPS_PATH):
         with open(TIMESTAMPS_PATH, 'r') as f:
