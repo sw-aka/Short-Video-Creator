@@ -10,7 +10,7 @@ def download_video(url, resolution='1280x720'):
         #     print(stream)
         # return
         # Get the video stream with the specified resolution
-        video_stream = yt.streams.filter(res='720p', mime_type='video/mp4').first()
+        video_stream = yt.streams.filter(mime_type='video/mp4').get_highest_resolution()
 
         if video_stream is None:
             print('No stream matching the requiements.')
