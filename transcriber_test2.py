@@ -6,13 +6,16 @@ start_time = time.time()
 #TypeError: expected np.ndarray (got AudioFileClip)
 from moviepy.editor import VideoFileClip
 
-video = VideoFileClip("video.mp4")
+# video = VideoFileClip("video.mp4")
 
-audio_data = list(video.audio.iter_chunks(chunksize=44100))
-audio_array = np.vstack(audio_data)
+# audio_data = list(video.audio.iter_chunks(chunksize=22050))
+# audio_array = np.vstack(audio_data)
 
+# video.audio.write_audiofile("audio.mp3", codec="mp3")
 
-print(type(audio_array))
+# print(type(audio_array))
+
+# video.close()
 
 # exit()
 
@@ -22,12 +25,13 @@ print(type(audio_array))
 
 # Concatenate the audio chunks into a single array
 # audio = np.concatenate(audio_chunks)
-video.close()
+# video.close()
 
+audio = whisper.load_audio("audio.mp3")
 
-model = whisper.load_model("whisper-large-v3", device="cpu")
+model = whisper.load_model("whisper-small.en", device="cpu")
 
-result = whisper.transcribe(model, audio_array, language="en")
+result = whisper.transcribe(model, audio, language="en")
 
 import json
 print(json.dumps(result, indent = 2, ensure_ascii = False))
