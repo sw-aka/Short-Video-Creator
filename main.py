@@ -1,6 +1,6 @@
 #from moviepy.video.io.VideoFileClip import VideoFileClip, VideoClip
 from moviepy.video.fx.all import crop as moviepy_crop
-from moviepy.editor import VideoFileClip, clips_array, concatenate_videoclips, ImageClip, CompositeVideoClip
+from moviepy.editor import VideoFileClip, clips_array, concatenate_videoclips, ImageClip, CompositeVideoClip, VideoClip
 import whisper_timestamped as whisper
 from PIL import Image, ImageDraw, ImageFont
 
@@ -9,13 +9,33 @@ import os
 import math
 import time
 import numpy as np
+import threading
+import multiprocessing
+
+
+MAX_SAVING_PROCESSES = 4
+
+INPUT_VIDEOS_DIR = 'input_videos'
+OUTPUT_VIDEOS_DIR = 'output_videos'
 
 BACKGROUND_VIDEOS_DIR = 'background_videos'
+FONTS_DIR = 'fonts'
 
-FULL_RESOLUTION = (1080/5, 1920/5)
-PERCENT_MAIN_CLIP = 30
+FULL_RESOLUTION = (1080, 1920)
+PERCENT_MAIN_CLIP = 40
 TEXT_POSITION_PERCENT = 30
-FONT_SIZE = 20
+
+FONT_SIZE = 100
+FONT_BORDER_WEIGHT = 10
+
+
+
+currently_saving = 0
+processed_clips = False
+clips_queue = []
+processing_threads = []
+
+
 
 class VideoTools:
     clip: VideoFileClip = None
@@ -64,7 +84,6 @@ class VideoTools:
             self.clip = self.clip.resize((width, height))
         
         return self.clip
-    
 
 class Tools:
 
@@ -118,9 +137,6 @@ class BackgroudVideo:
 
             clip.write_videofile(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name), codec="libx264", audio_codec="aac",)
 
-
-
-
 class VideoCreation:
 
     clip = None
@@ -131,7 +147,6 @@ class VideoCreation:
         self.clip = clip
         self.audio = clip.audio
         
-        pass
     
     def __deinit__(self) -> None:
         if self.clip:
@@ -141,14 +156,16 @@ class VideoCreation:
             self.background_clip.close()
             self.background_clip = None
         
-    def process(self):
+    def process(self) -> VideoClip:
         
         self.clip = self.create_final_clip()
-        # self.clip.write_videofile("output.mp4", codec="libx264", audio_codec="aac",)
-        transcription = self.create_transcription(self.clip, self.audio)
+        
+        transcription = self.create_transcription(self.audio)
         self.clip = self.add_captions_to_video(self.clip, transcription)
 
-        self.clip.write_videofile("output.mp4", codec="libx264", audio_codec="aac",)
+        return self.clip
+    
+        self.clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=self.clip.fps, threads = 32, verbose=False)#logger = None)
 
     def create_final_clip(self):
         self.background_clip = BackgroudVideo.get_clip(self.clip.duration)
@@ -160,21 +177,18 @@ class VideoCreation:
         self.clip = clips_array([[self.clip], [self.background_clip]])
         return self.clip
 
-    def create_transcription(self, clip, audio):
+    def create_transcription(self, audio):
 
-        # audio = clip.audio
-
-        print(type(clip))
-        print(type(audio))
 
         os.makedirs("temp", exist_ok=True)
 
         file_dir = f"temp/{time.time() * 10**20:.0f}.mp3"
-        audio.write_audiofile(file_dir, codec="mp3")
+        audio.write_audiofile(file_dir, codec="mp3", verbose=False, logger=None)
+        
 
-        loaded_audio = whisper.load_audio("audio.mp3")
+        loaded_audio = whisper.load_audio(file_dir)
         model = whisper.load_model("whisper-small.en", device="cpu")
-        result = whisper.transcribe(model, loaded_audio, language="en")
+        result = whisper.transcribe(model, loaded_audio, language="en", verbose=None)
 
         os.remove(file_dir)
 
@@ -197,13 +211,18 @@ class VideoCreation:
         
         clips = []
         previous_time = 0
+
+        queued_texts = []
+        full_start = None
+
         for pos, timestamp in enumerate(timestamps):
             
             start, end = timestamp["timestamp"]
             text = timestamp["text"]
 
-            if start > previous_time:
+            if start > previous_time and len(queued_texts) == 0:
                 clips.append(clip.subclip(previous_time, start))
+                
 
             if pos + 1 < len(timestamps):
                 next_timestamp_start = timestamps[pos + 1]['timestamp'][0]
@@ -213,15 +232,33 @@ class VideoCreation:
                     else:
                         end = next_timestamp_start
             
+            if end - previous_time < 0.3 and pos + 1 < len(timestamps):
+                if full_start is None:
+                    full_start = start
+                queued_texts.append(text)
+                continue
             
-            previous_time = end
-            
+            queued_texts.append(text)
+
+            if len(queued_texts) > 0:
+                text = " ".join(queued_texts)
+                queued_texts = []
+
+            if full_start is None:
+                full_start = start
+
+            if full_start > clip.duration or end > clip.duration:
+                continue
+
             clips.append(
                 self.add_text_to_video(
-                    clip.subclip(start, end),
+                    clip.subclip(full_start, end),
                     text
                 )
             )
+
+            previous_time = end
+            full_start = None
         
         
         clip = concatenate_videoclips(clips)
@@ -239,7 +276,7 @@ class VideoCreation:
         
         text_image = self.create_text_image(
             text,
-            "SweetieBubbleGum-Regular.ttf",
+            os.path.join(FONTS_DIR, "SweetieBubbleGum-Regular.ttf"),
             FONT_SIZE,
             clip.size[0]
             )
@@ -253,51 +290,116 @@ class VideoCreation:
         return clip
 
     def create_text_image(self, text, font_path, font_size, max_width):
-        # Create a blank image with a white background
-        image = Image.new("RGBA", (max_width, 1000), (0,0,0,0))
-        draw = ImageDraw.Draw(image)
+        image = Image.new("RGBA", (max_width, font_size*10), (0,0,0,0))
 
-        # Load the font
         font = ImageFont.truetype(font_path, font_size)
 
-        # Split the text into words
-        words = text.split()
+        draw = ImageDraw.Draw(image)
 
-        # Initialize variables
-        current_line = ""
-        y_position = 10
+        _, _, w, h = draw.textbbox((0,0), text, font=font)
 
-        text_max_width = max_width - 50
+        draw.text(((max_width - w)/2, round(h * 0.2)), text, font=font, fill="white", stroke_width=FONT_BORDER_WEIGHT, stroke_fill='black')
 
-        for word in words:
-            # Check if adding the next word exceeds the max width
-            text_width = draw.textlength(current_line + " " + word, font)
-            text_height = font_size
-            if text_width <= text_max_width:
-                # If not, add the word to the current line
-                if current_line:
-                    current_line += " "
-                current_line += word
-            else:
-                # Calculate the X-position to center the text
-                x_position = (text_max_width - draw.textlength(current_line, font)) // 2
-                # Draw the current line at the calculated position
-                draw.text((x_position, y_position), current_line, font=font, fill="white", stroke_width=5, stroke_fill='black')
-                y_position += text_height
-                current_line = word
+    
+        # ImageDraw.Draw(image).text((0,0), text, font=font, fill="white")
 
-        # Calculate the X-position for the last line to center the text
-        x_position = (max_width - draw.textlength(current_line, font)) // 2
-        # Draw the last line at the calculated position
-        draw.text((x_position, y_position), current_line, font=font, fill="white", stroke_width=5, stroke_fill='black')
+        image = image.crop((0, 0, max_width, round(h * 1.6),))
 
-        # Crop the image to the actual content size
-        image = image.crop((0, 0, max_width, y_position + text_height + 100))
-        # return image
-        
         return image
 
-VideoCreation(VideoFileClip('video.mp4')).process()
+
+def video_saving_process(clip: VideoClip):
+
+    clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
+
+    pass
+
+def process_starting_thread(clip: VideoClip, file: str):
+    global currently_saving
+    # process = multiprocessing.Process(target=video_saving_process, args=(clip,))
+    # process.start()
+    # process.join()
+
+    file_dir = f"{OUTPUT_VIDEOS_DIR}/{time.time() * 10**20:.0f}.mp4"
+    try:
+        clip.write_videofile(file_dir, codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
+        clip.close()
+        # os.remove(os.path.join(INPUT_VIDEOS_DIR, file))
+    except Exception as e:
+        clip.close()
+        print("Error when saving.")
+        # os.rename(
+        #     os.path.join(INPUT_VIDEOS_DIR, file),
+        #     os.path.join(INPUT_VIDEOS_DIR, f"ERROR {file}")
+        #     )
+        # print(f"Error: {e}")
+        
+
+    
+    currently_saving -= 1
+
+
+def video_saving_thread():
+    global currently_saving
+
+    threads = []
+    while (not processed_clips) or (len(clips_queue) != 0):
+        if (len(clips_queue) == 0) or (currently_saving >= MAX_SAVING_PROCESSES):
+            time.sleep(0.01)
+            continue
+
+            
+        clip, file = clips_queue.pop(0)
+
+        t = threading.Thread(target=process_starting_thread, args=(clip, file,))
+        t.start()
+        threads.append(t)
+
+        currently_saving += 1
+
+
+    for thread in threads:
+        thread.join()
+
+    pass
+
+def main():
+    global processed_clips
+
+    os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
+
+    saving_thread = threading.Thread(target=video_saving_thread)
+    saving_thread.start()
+
+    
+
+    for video_dir in os.listdir(INPUT_VIDEOS_DIR):
+        while len(clips_queue) >= MAX_SAVING_PROCESSES + 1:
+            time.sleep(0.01)
+
+        print(f"Processing: {video_dir}")
+
+        clip = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, video_dir))
+        clip = VideoCreation(clip).process()
+
+        clips_queue.append((clip, video_dir))
+        # clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False)
+
+    processed_clips = True
+    saving_thread.join()
+
+    pass
+
+
+start_time = time.time()
+
+main()
+
+print(f"Runtime: {round(time.time()-start_time, 2)}")
+
+
+# VideoCreation(VideoFileClip('video.mp4')).process()
 
 
 

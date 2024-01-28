@@ -4,3 +4,4 @@
 *.png
 *.txt
 /whisper-large-v3
+!SweetieBubbleGum-Regular.ttf
