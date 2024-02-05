@@ -1,19 +1,17 @@
-#from moviepy.video.io.VideoFileClip import VideoFileClip, VideoClip
+import multiprocessing
+import os
+import time
+import math
+import random
+import numpy as np
+
 from moviepy.video.fx.all import crop as moviepy_crop
 from moviepy.editor import VideoFileClip, clips_array, concatenate_videoclips, ImageClip, CompositeVideoClip, VideoClip
 import whisper_timestamped as whisper
 from PIL import Image, ImageDraw, ImageFont
 
-import random
-import os
-import math
-import time
-import numpy as np
-import threading
-import multiprocessing
 
-
-MAX_SAVING_PROCESSES = 1
+MAX_NUMBER_OF_PROCESSES = 2
 
 INPUT_VIDEOS_DIR = 'input_videos'
 OUTPUT_VIDEOS_DIR = 'output_videos'
@@ -27,14 +25,6 @@ TEXT_POSITION_PERCENT = 30
 
 FONT_SIZE = 100
 FONT_BORDER_WEIGHT = 10
-
-
-
-currently_saving = 0
-processed_clips = False
-clips_queue = []
-processing_threads = []
-
 
 
 class VideoTools:
@@ -168,7 +158,6 @@ class VideoCreation:
 
         return self.clip
     
-        self.clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=self.clip.fps, threads = 32, verbose=False)#logger = None)
 
     def create_final_clip(self):
         self.background_clip = BackgroudVideo.get_clip(self.clip.duration)
@@ -188,12 +177,17 @@ class VideoCreation:
         file_dir = f"temp/{time.time() * 10**20:.0f}.mp3"
         audio.write_audiofile(file_dir, codec="mp3", verbose=False, logger=None)
         
+        while not os.path.exists(file_dir):
+            time.sleep(0.01)
 
         loaded_audio = whisper.load_audio(file_dir)
         model = whisper.load_model("whisper-small.en", device="cpu")
         result = whisper.transcribe(model, loaded_audio, language="en", verbose=None)
 
-        os.remove(file_dir)
+        try:
+            os.remove(file_dir)
+        except FileNotFoundError:
+            pass
 
         timestamps = []
 
@@ -217,6 +211,8 @@ class VideoCreation:
 
         queued_texts = []
         full_start = None
+
+        end = 0
 
         for pos, timestamp in enumerate(timestamps):
             
@@ -264,12 +260,22 @@ class VideoCreation:
             full_start = None
         
         
+        if clip.duration - end > 0.01:
+            clips.append(
+                clip.subclip(end, clip.duration)
+            )
+            
+        
         clip = concatenate_videoclips(clips)
 
-        clip = clip.subclip(
-            timestamps[0]["timestamp"][0],
-            timestamps[-1]["timestamp"][1]
-        )
+        # try:
+        #     clip = clip.subclip(
+        #         timestamps[0]["timestamp"][0],
+        #         timestamps[-1]["timestamp"][1]
+        #     )   
+        # except IndexError:
+        #     pass
+            
 
         return clip
 
@@ -311,117 +317,93 @@ class VideoCreation:
         return image
 
 
-def video_saving_process(clip: VideoClip):
+def start_process(file_name, processes_status_dict, video_queue: multiprocessing.Queue):
 
-    clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
+    print(f"Processing: {file_name}")
+    start_time = time.time()
 
-    pass
+    process_identifier = multiprocessing.current_process().pid
 
-def process_starting_thread(clip: VideoClip, file: str):
-    global currently_saving
-    # process = multiprocessing.Process(target=video_saving_process, args=(clip,))
-    # process.start()
-    # process.join()
+    processes_status_dict[process_identifier] = False
 
-    file_dir = f"{OUTPUT_VIDEOS_DIR}/{file.split('/')[-1]}"
-    if True:#try:
-        
+    input_video = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, file_name))
+    output_video = VideoCreation(input_video).process()
+    
+    print(f"Saving: {file_name}")
 
+    output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
+    end_time = round( ((output_video.duration * 100 // output_video.fps) * output_video.fps / 100), 2)
+    output_video = output_video.subclip(t_end=end_time)
+
+    for pos in range(5):
         try:
-        #     clip.write_videofile(file_dir, codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
-            end_time = round( ((clip.duration * 100 // clip.fps) * clip.fps / 100), 2)
-            clip = clip.subclip(t_end=end_time)
-            clip.write_videofile(file_dir, codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
-        # except IndexError:
-        #     print("Index error!")
-        #     # Short by one frame, so get rid on the last frame:
-        #     clip = clip.subclip(t_end=(math.floor((clip.duration - 1.0/clip.fps) * 100)/100))
-        #     clip.write_videofile(file_dir, codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False, logger=None)
-        except Exception as e:
-            print("Exception {} was raised!!".format(e))  
-        clip.close()
+            output_video.write_videofile(output_dir, codec="h264_nvenc", audio_codec="aac", fps=output_video.fps, threads = 32, verbose=False, logger=None)
+            break
+        except IOError:
+            time.sleep(1)
+    else:
+        print(f"ERROR Saving: {file_name}")
     
-        # os.remove(os.path.join(INPUT_VIDEOS_DIR, file))
-    # except Exception as e:
-    #     clip.close()
-    #     print("Error when saving.")
-        # os.rename(
-        #     os.path.join(INPUT_VIDEOS_DIR, file),
-        #     os.path.join(INPUT_VIDEOS_DIR, f"ERROR {file}")
-        #     )
-        # print(f"Error: {e}")
-        
+    input_video.close()
+    output_video.close()
 
+    print(f"Runtime: {round(time.time()-start_time, 2)} - {file_name}")
     
-    currently_saving -= 1
+    processes_status_dict[process_identifier] = True
 
 
-def video_saving_thread():
-    global currently_saving
-
-    threads = []
-    while (not processed_clips) or (len(clips_queue) != 0):
-        if (len(clips_queue) == 0) or (currently_saving >= MAX_SAVING_PROCESSES):
-            time.sleep(0.01)
-            continue
-
-            
-        clip, file = clips_queue.pop(0)
-
-        t = threading.Thread(target=process_starting_thread, args=(clip, file,))
-        t.start()
-        threads.append(t)
-
-        currently_saving += 1
 
 
-    for thread in threads:
-        thread.join()
 
-    pass
 
-def main():
-    global processed_clips
+
+if __name__ == '__main__':
+
+    manager = multiprocessing.Manager()
+
+    processes_status_dict = manager.dict()
+
+    video_queue = multiprocessing.Queue()
+
+    processes = {}
 
     os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
     os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
 
-    saving_thread = threading.Thread(target=video_saving_thread)
-    saving_thread.start()
+    input_video_names = os.listdir(INPUT_VIDEOS_DIR)
 
-    skip = 9
+    for name in input_video_names:
+        video_queue.put(name)
+        # break ## TEMP
+    
 
-    pos = 0
-    for video_dir in os.listdir(INPUT_VIDEOS_DIR):
-        pos += 1
-        if pos <= skip:
-            continue
+    num_active_processes = 0
+    
+    print('STARTED')
 
-        while len(clips_queue) >= MAX_SAVING_PROCESSES:
-            time.sleep(0.01)
+    while (video_queue.qsize() != 0) or (len(processes) != 0):
+        
+        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (video_queue.qsize() > 0):
+            
+            file_name = video_queue.get()
 
-        print(f"Processing: {video_dir}")
+            p = multiprocessing.Process(target=start_process, args=(file_name, processes_status_dict, video_queue))
+            p.start()
+            processes[p.pid] = p
+            num_active_processes += 1
 
-        clip = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, video_dir))
-        clip = VideoCreation(clip).process()
+        for pid, complete in processes_status_dict.items():
+            if complete:
+                processes[pid].join()
+                del processes[pid]
+                del processes_status_dict[pid]
+                num_active_processes -= 1
 
-        clips_queue.append((clip, video_dir))
-        # clip.write_videofile("output.mp4", codec="h264_nvenc", audio_codec="aac", fps=clip.fps, threads = 32, verbose=False)
-
-    processed_clips = True
-    saving_thread.join()
-
+        pass
+    
+    print('MAIN PROCESS COMPLETE')
     pass
 
-
-start_time = time.time()
-
-main()
-
-print(f"Runtime: {round(time.time()-start_time, 2)}")
-
-
-# VideoCreation(VideoFileClip('video.mp4')).process()
 
 
 
