@@ -17,6 +17,9 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 ## Example Output
 <video width="630" height="300" src="https://github.com/user-attachments/assets/f9e787e9-8de8-48da-9303-956cd58a45f0.mp4" title="Example Output"></video>
 
+<img src="https://github.com/user-attachments/assets/86b149d3-55f2-4e74-b51f-b607a781dc22" width="200" title="Example Output - Screenshot 1"/>
+<img src="https://github.com/user-attachments/assets/0a59928f-fe80-4da9-946d-06a0ec6d1660" width="200" title="Example Output - Screenshot 2"/>
+
 ## Requirements
 - Python >=3.7 - [Download Here](https://www.python.org/downloads)
 - FFmpeg - [Download Here](https://ffmpeg.org/download.html)
