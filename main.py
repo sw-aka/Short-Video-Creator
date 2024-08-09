@@ -27,7 +27,8 @@ from config import (
     PERCENT_MAIN_CLIP,
     TEXT_POSITION_PERCENT,
     MODEL_NAME,
-    LANGUAGE
+    LANGUAGE,
+    NUM_THREADS
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -427,7 +428,7 @@ def start_process(file_name, processes_status_dict, video_queue: multiprocessing
                 codec="libx264",
                 audio_codec="aac",
                 fps=output_video.fps,
-                threads=12,
+                threads=NUM_THREADS,
                 verbose=False,
                 logger=None
             )
