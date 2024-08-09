@@ -1,0 +1,4 @@
+numpy==1.26.4
+pillow==10.0.0
+transformers==4.44.0
+whisper-timestamped==1.15.4

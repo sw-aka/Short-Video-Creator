@@ -1,7 +1,2 @@
-*.mp4
-*.mp3
-*.ttf
-*.png
-*.txt
-/whisper-large-v3
-!SweetieBubbleGum-Regular.ttf
+.venv
+__pycache__
