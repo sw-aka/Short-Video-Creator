@@ -12,6 +12,7 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
+- [Attributions](ATTRIBUTIONS.md)
 
 ## Example Output
 <video width="630" height="300" src="https://github.com/user-attachments/assets/f9e787e9-8de8-48da-9303-956cd58a45f0.mp4" title="Example Output"></video>
@@ -57,3 +58,5 @@ You can edit the settings in ```config.py```.
 
 ## License
 This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](LICENSE.md) License.
+
+## [**Attributions**](ATTRIBUTIONS.md)
