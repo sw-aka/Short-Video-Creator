@@ -1,4 +1,4 @@
-# AI Short Video Creator 
+# AI Short Video Creator
 Tool to automatically create short clips with a baground video and AI-generated captions.
 Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 
