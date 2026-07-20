@@ -468,9 +468,10 @@ if __name__ == '__main__':
     logging.info('STARTED')
 
     # Main loop to manage video processing
-    while (video_queue.qsize() != 0) or (len(processes) != 0):
+    # Note: Queue.qsize() raises NotImplementedError on macOS, so use empty() instead
+    while (not video_queue.empty()) or (len(processes) != 0):
         # Check if we can start a new process
-        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (video_queue.qsize() > 0):
+        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (not video_queue.empty()):
             file_name = video_queue.get()  # Get the next video file name from the queue
 
             # Create a new process for video processing
