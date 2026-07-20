@@ -12,7 +12,6 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
-- [Attributions](ATTRIBUTIONS.md)
 
 ## Example Output
 <video width="630" height="300" src="https://github.com/user-attachments/assets/f9e787e9-8de8-48da-9303-956cd58a45f0.mp4" title="Example Output"></video>
@@ -21,7 +20,7 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 <img src="https://github.com/user-attachments/assets/0a59928f-fe80-4da9-946d-06a0ec6d1660" width="200" title="Example Output - Screenshot 2"/>
 
 ## Requirements
-- Python >=3.7 - [Download Here](https://www.python.org/downloads)
+- Python >=3.11 - [Download Here](https://www.python.org/downloads)
 - FFmpeg - [Download Here](https://ffmpeg.org/download.html)
 - Git - [Download Here](https://git-scm.com/downloads)
 - Git LFS - [Download Here](https://docs.github.com/en/repositories/working-with-files/managing-large-files/installing-git-large-file-storage)
@@ -62,7 +61,11 @@ You can edit the settings in ```config.py```.
 ## License
 This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](LICENSE.md) License.
 
-## [**Attributions**](ATTRIBUTIONS.md)
+Dependencies are installed from PyPI under their own licenses and are not
+redistributed here. Note that [whisper-timestamped](https://github.com/linto-ai/whisper-timestamped)
+is GPLv3: bundling it into a distributed artifact (e.g. a packaged binary or
+shipped container image) would place that artifact under GPLv3, which is
+incompatible with the NonCommercial term of this project's license.
 
 
 
