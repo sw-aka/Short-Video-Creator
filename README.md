@@ -22,8 +22,12 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 ## Requirements
 - Python >=3.11 - [Download Here](https://www.python.org/downloads)
 - FFmpeg - [Download Here](https://ffmpeg.org/download.html)
-- Git - [Download Here](https://git-scm.com/downloads)
-- Git LFS - [Download Here](https://docs.github.com/en/repositories/working-with-files/managing-large-files/installing-git-large-file-storage)
+
+Captions are transcribed locally with NVIDIA's
+[Parakeet TDT 0.6B v3](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx)
+model running on [onnx-asr](https://github.com/istupakov/onnx-asr) (works on
+Windows, macOS and Linux, CPU-only by default). The model (~600 MB) is
+downloaded automatically from Hugging Face on first run and cached locally.
 
 
 ## Installation
@@ -62,10 +66,8 @@ You can edit the settings in ```config.py```.
 This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](LICENSE.md) License.
 
 Dependencies are installed from PyPI under their own licenses and are not
-redistributed here. Note that [whisper-timestamped](https://github.com/linto-ai/whisper-timestamped)
-is GPLv3: bundling it into a distributed artifact (e.g. a packaged binary or
-shipped container image) would place that artifact under GPLv3, which is
-incompatible with the NonCommercial term of this project's license.
+redistributed here. The Parakeet TDT 0.6B v3 model is released by NVIDIA under
+the [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) license.
 
 
 
