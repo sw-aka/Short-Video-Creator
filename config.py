@@ -1,5 +1,6 @@
 ## Model settings
-MODEL_NAME = 'whisper-small.en'
+MODEL_NAME = 'nemo-parakeet-tdt-0.6b-v3'
+QUANTIZATION = 'int8'
 LANGUAGE = 'en'
 
 ## Processing settings
