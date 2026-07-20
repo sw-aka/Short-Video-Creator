@@ -24,10 +24,15 @@ from config import (
     OUTPUT_VIDEOS_DIR,
     PERCENT_MAIN_CLIP,
     TEXT_POSITION_PERCENT,
-    NUM_THREADS
+    NUM_THREADS,
+    VIDEO_BITRATE,
+    VIDEO_CODEC
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=getattr(logging, os.environ.get('LOG_LEVEL', 'WARNING').upper(), logging.WARNING),
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class VideoTools:
     # Initialize the VideoTools class with a VideoFileClip
@@ -405,18 +410,26 @@ def start_process(file_name, processes_status_dict, video_queue: multiprocessing
     output_video = output_video.subclipped(end_time=end_time)
 
     # Attempt to save the output video, retrying up to 5 times on failure
+    video_codec = VIDEO_CODEC
+    video_bitrate = VIDEO_BITRATE
     for pos in range(5):
         try:
             output_video.write_videofile(
                 output_dir,
-                codec="libx264",
+                codec=video_codec,
+                bitrate=video_bitrate,
                 audio_codec="aac",
                 fps=output_video.fps,
                 threads=NUM_THREADS,
                 logger=None
             )
             break  # Exit the loop if saving is successful
-        except IOError:
+        except Exception as error:
+            if video_codec == VIDEO_CODEC:
+                video_codec = "libx264"
+                video_bitrate = None
+            elif not isinstance(error, IOError):
+                raise
             logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")  # Log the error and retry
             time.sleep(1)  # Wait before retrying
     else:
@@ -491,7 +504,6 @@ if __name__ == '__main__':
     # Clean up temporary folders after processing is complete
     delete_temp_folder()
     logging.info('MAIN PROCESS COMPLETE')
-
 
 
 

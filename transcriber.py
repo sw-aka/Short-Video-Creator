@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 import logging
+import os
 
 import onnx_asr
 
@@ -12,6 +14,23 @@ MAX_WORD_DURATION = 0.5
 _model = None
 
 
+@contextmanager
+def _suppress_stderr():
+    """Suppress C-library stderr output unless debug logging is enabled."""
+    if os.environ.get("LOG_LEVEL", "WARNING").upper() == "DEBUG":
+        yield
+        return
+
+    saved_stderr = os.dup(2)
+    try:
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 2)
+            yield
+    finally:
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
+
+
 def _get_model():
     """Load the ASR model, caching it for reuse within the process.
 
@@ -23,6 +42,9 @@ def _get_model():
     global _model
     if _model is None:
         logging.info(f"Loading ASR model: {MODEL_NAME} ({QUANTIZATION})")
+        if os.environ.get("LOG_LEVEL", "WARNING").upper() != "DEBUG":
+            import onnxruntime
+            onnxruntime.set_default_logger_severity(3)
         _model = onnx_asr.load_model(MODEL_NAME, quantization=QUANTIZATION).with_timestamps()
         logging.info(f"Loaded ASR model: {MODEL_NAME}")
     return _model
@@ -75,7 +97,8 @@ def transcribe_words(audio_path):
              Returns an empty list if no speech is detected.
     """
     model = _get_model()
-    result = model.recognize(audio_path)
+    with _suppress_stderr():
+        result = model.recognize(audio_path)
 
     if not result.text.strip():
         return []
