@@ -5,14 +5,13 @@ import random
 import shutil
 import time
 import logging
-import subprocess
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from moviepy import (VideoFileClip, clips_array, concatenate_videoclips,
                      ImageClip, CompositeVideoClip, VideoClip)
-import whisper_timestamped as whisper
 
+import transcriber
 from config import (
     BACKGROUND_VIDEOS_DIR,
     FONT_BORDER_WEIGHT,
@@ -25,8 +24,6 @@ from config import (
     OUTPUT_VIDEOS_DIR,
     PERCENT_MAIN_CLIP,
     TEXT_POSITION_PERCENT,
-    MODEL_NAME,
-    LANGUAGE,
     NUM_THREADS
 )
 
@@ -236,34 +233,22 @@ class VideoCreation:
         # Generate transcription from the audio
         os.makedirs("temp", exist_ok=True)  # Create a temporary directory for audio files
 
-        # Create a unique file name for the audio file
-        file_dir = f"temp/{time.time() * 10**20:.0f}.mp3"
-        audio.write_audiofile(file_dir, codec="mp3", logger=None)  # Save audio to file
+        # Create a unique file name for the audio file (16 kHz mono WAV for ASR)
+        file_dir = f"temp/{time.time() * 10**20:.0f}.wav"
+        audio.write_audiofile(file_dir, fps=16000, codec="pcm_s16le", ffmpeg_params=["-ac", "1"], logger=None)  # Save audio to file
 
         # Wait until the audio file is created
         while not os.path.exists(file_dir):
             time.sleep(0.01)
 
-        # Load the audio file and transcribe it
-        loaded_audio = whisper.load_audio(file_dir)
-        model = whisper.load_model(MODEL_NAME, device="cpu")
-        result = whisper.transcribe(model, loaded_audio, language=LANGUAGE, verbose=None)
+        # Transcribe the audio file into words with timestamps
+        timestamps = transcriber.transcribe_words(file_dir)
 
         # Clean up the temporary audio file
         try:
             os.remove(file_dir)
         except FileNotFoundError:
             pass
-
-        timestamps = []  # List to hold timestamps and words
-
-        # Extract timestamps and words from the transcription result
-        for segment in result['segments']:
-            for word in segment['words']:
-                timestamps.append({
-                    'timestamp': (word['start'], word['end']),
-                    'text': word['text']
-                })
 
         return timestamps  # Return the list of timestamps and words
 
@@ -458,50 +443,10 @@ def delete_temp_folder():
         pass  # Ignore permission errors if the folder cannot be deleted or is not found
 
 
-import subprocess
-
-def check_command(command):
-    try:
-        # Run the command and check if it is installed
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            return None
-    except Exception as e:
-        return str(e)
-
-def clone_respository():
-    
-    
-    # Check for Git
-    git_version = check_command(['git', '--version'])
-    if not git_version:
-        raise Exception("Git is not installed. Git must be installed to download model.")
-
-    git_lfs_version = check_command(['git', 'lfs', 'version'])
-    if not git_lfs_version:
-        raise Exception("Git LFS is not installed. LFS is required to download model. Install Git LFS and try again.")
-        
-
-    repo_url = f'https://huggingface.co/openai/{MODEL_NAME}'
-    
-    logging.info(f"Cloning {repo_url}")
-    # Run the git clone command
-    subprocess.run(['git', 'clone', repo_url], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-    logging.info(f"Cloned {repo_url}")
-    
-
-
 if __name__ == '__main__':
     # Clean up any temporary folders before starting
     delete_temp_folder()
-    
-    if not os.path.exists(MODEL_NAME):
-        logging.warning(f'Model {MODEL_NAME} not found.')
-        logging.info('Downloading model...')
-        clone_respository()
-        
+
     # Create a manager for shared data between processes
     manager = multiprocessing.Manager()
     processes_status_dict = manager.dict()  # Dictionary to track process statuses
