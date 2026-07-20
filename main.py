@@ -9,9 +9,8 @@ import subprocess
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import (VideoFileClip, clips_array, concatenate_videoclips,
-                             ImageClip, CompositeVideoClip, VideoClip)
-from moviepy.video.fx.all import crop as moviepy_crop
+from moviepy import (VideoFileClip, clips_array, concatenate_videoclips,
+                     ImageClip, CompositeVideoClip, VideoClip)
 import whisper_timestamped as whisper
 
 from config import (
@@ -68,7 +67,7 @@ class VideoTools:
         max_ratio = max(width_change_ratio, height_change_ratio)
 
         # Resize the clip based on the maximum ratio
-        self.clip = self.clip.resize((
+        self.clip = self.clip.resized((
             original_width * max_ratio,
             original_height * max_ratio,
         ))
@@ -82,14 +81,14 @@ class VideoTools:
             height_change = new_height - height
             new_y1 = round(height_change / 2)  # Calculate the starting y-coordinate
             new_y2 = min(new_y1 + height, new_height)  # Calculate the ending y-coordinate
-            self.clip = moviepy_crop(self.clip, y1=new_y1, y2=new_y2)  # Crop the video
+            self.clip = self.clip.cropped(y1=new_y1, y2=new_y2)  # Crop the video
         elif height_change_ratio > width_change_ratio:
             # Calculate the horizontal crop
             width_change = new_width - width
             new_x1 = round(width_change / 2)  # Calculate the starting x-coordinate
             new_x2 = min(new_x1 + width, new_width)  # Calculate the ending x-coordinate
-            self.clip = moviepy_crop(self.clip, x1=new_x1, x2=new_x2)  # Crop the video
-            self.clip = self.clip.resize((width, height))  # Resize to the final dimensions
+            self.clip = self.clip.cropped(x1=new_x1, x2=new_x2)  # Crop the video
+            self.clip = self.clip.resized((width, height))  # Resize to the final dimensions
 
         return self.clip  # Return the cropped video clip
 
@@ -133,7 +132,7 @@ class BackgroudVideo:
         cropped_clip = VideoTools(trimmed_clip).crop(target_resolution[0], target_resolution[1])
 
         # Return the cropped clip without audio
-        return cropped_clip.set_audio(None)
+        return cropped_clip.without_audio()
     
     @staticmethod
     def select_clip() -> str:
@@ -161,7 +160,7 @@ class BackgroudVideo:
         
         # Randomly select a start time for the subclip
         clip_start_time = Tools.round_down(random.uniform(0, clip.duration - duration))
-        return clip.subclip(clip_start_time, clip_start_time + duration)
+        return clip.subclipped(clip_start_time, clip_start_time + duration)
 
     @staticmethod
     def get_target_resolution():
@@ -239,7 +238,7 @@ class VideoCreation:
 
         # Create a unique file name for the audio file
         file_dir = f"temp/{time.time() * 10**20:.0f}.mp3"
-        audio.write_audiofile(file_dir, codec="mp3", verbose=False, logger=None)  # Save audio to file
+        audio.write_audiofile(file_dir, codec="mp3", logger=None)  # Save audio to file
 
         # Wait until the audio file is created
         while not os.path.exists(file_dir):
@@ -288,7 +287,7 @@ class VideoCreation:
 
             # If there is a gap before the current caption, add the previous clip
             if start > previous_time and len(queued_texts) == 0:
-                clips.append(clip.subclip(previous_time, start))
+                clips.append(clip.subclipped(previous_time, start))
 
             # Adjust the end time if there is a next timestamp
             if pos + 1 < len(timestamps):
@@ -323,7 +322,7 @@ class VideoCreation:
             # Add the captioned clip to the list
             clips.append(
                 self.add_text_to_video(
-                    clip.subclip(full_start, end),
+                    clip.subclipped(full_start, end),
                     text
                 )
             )
@@ -334,7 +333,7 @@ class VideoCreation:
         # Add any remaining clip after the last caption
         if clip.duration - end > 0.01:
             clips.append(
-                clip.subclip(end, clip.duration)
+                clip.subclipped(end, clip.duration)
             )
 
         clip = concatenate_videoclips(clips)  # Concatenate all clips with captions
@@ -353,7 +352,7 @@ class VideoCreation:
         image_clip = ImageClip(np.array(text_image), duration=clip.duration)  # Create an image clip for the text
 
         y_offset = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))  # Calculate vertical position for text
-        clip = CompositeVideoClip([clip, image_clip.set_position((0, y_offset,))])  # Overlay text on the video
+        clip = CompositeVideoClip([clip, image_clip.with_position((0, y_offset,))])  # Overlay text on the video
 
         return clip  # Return the video clip with text
 
@@ -380,7 +379,7 @@ import os
 import time
 import shutil
 import multiprocessing
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 
 # Constants for input and output directories
 INPUT_VIDEOS_DIR = 'input_videos'
@@ -418,7 +417,7 @@ def start_process(file_name, processes_status_dict, video_queue: multiprocessing
     end_time = round(((output_video.duration * 100 // output_video.fps) * output_video.fps / 100), 2)
     
     # Create a subclip of the output video
-    output_video = output_video.subclip(t_end=end_time)
+    output_video = output_video.subclipped(end_time=end_time)
 
     # Attempt to save the output video, retrying up to 5 times on failure
     for pos in range(5):
@@ -429,7 +428,6 @@ def start_process(file_name, processes_status_dict, video_queue: multiprocessing
                 audio_codec="aac",
                 fps=output_video.fps,
                 threads=NUM_THREADS,
-                verbose=False,
                 logger=None
             )
             break  # Exit the loop if saving is successful
