@@ -34,6 +34,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+
+def list_video_files(directory):
+    """Return sorted video file names from a directory."""
+    video_extensions = {'.mp4', '.mov', '.mkv', '.avi', '.webm'}
+    return sorted(
+        name for name in os.listdir(directory)
+        if not name.startswith('.')
+        and os.path.isfile(os.path.join(directory, name))
+        and os.path.splitext(name)[1].lower() in video_extensions
+    )
+
+
 class VideoTools:
     clip: VideoFileClip = None
 
@@ -114,7 +126,7 @@ class BackgroudVideo:
 
     @staticmethod
     def select_clip() -> str:
-        clips = os.listdir(BACKGROUND_VIDEOS_DIR)
+        clips = list_video_files(BACKGROUND_VIDEOS_DIR)
         clip = random.choice(clips)
         return os.path.join(BACKGROUND_VIDEOS_DIR, clip)
 
@@ -143,7 +155,7 @@ class BackgroudVideo:
 
     @staticmethod
     def format_all_background_clips():
-        clips = os.listdir(BACKGROUND_VIDEOS_DIR)
+        clips = list_video_files(BACKGROUND_VIDEOS_DIR)
         for clip_name in clips:
             clip = VideoFileClip(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name))
             clip = VideoTools(clip).crop(FULL_RESOLUTION[0], FULL_RESOLUTION[1])
@@ -371,7 +383,7 @@ if __name__ == '__main__':
 
     # List of video files pending processing; only the parent process reads it,
     # so a plain list avoids multiprocessing.Queue's feeder-thread startup race
-    pending_videos = os.listdir(INPUT_VIDEOS_DIR)
+    pending_videos = list_video_files(INPUT_VIDEOS_DIR)
 
     processes = {}
     num_active_processes = 0
