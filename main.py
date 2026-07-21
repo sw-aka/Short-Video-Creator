@@ -35,18 +35,15 @@ logging.basicConfig(
 )
 
 class VideoTools:
-    # Initialize the VideoTools class with a VideoFileClip
     clip: VideoFileClip = None
 
     def __init__(self, clip: VideoFileClip) -> None:
-        """Constructor to initialize the VideoFileClip."""
         self.clip = clip
 
     def __deinit__(self) -> None:
-        """Destructor to clean up resources."""
         if self.clip:
-            self.clip.close()  # Close the clip to free resources
-            self.clip = None  # Set clip to None to avoid dangling reference
+            self.clip.close()
+            self.clip = None
 
     def crop(self, width: int, height: int) -> VideoFileClip:
         """Crop the video clip to the specified width and height.
@@ -58,41 +55,33 @@ class VideoTools:
         Returns:
             VideoFileClip: The cropped video clip.
         """
-        # Get the original dimensions of the video clip
         original_width, original_height = self.clip.size
 
-        # Calculate the change ratios for width and height
         width_change_ratio = width / original_width
         height_change_ratio = height / original_height
 
-        # Determine the maximum ratio to maintain aspect ratio
         max_ratio = max(width_change_ratio, height_change_ratio)
 
-        # Resize the clip based on the maximum ratio
         self.clip = self.clip.resized((
             original_width * max_ratio,
             original_height * max_ratio,
         ))
 
-        # Get the new dimensions after resizing
         new_width, new_height = self.clip.size
 
-        # Crop the video based on the aspect ratio
         if width_change_ratio > height_change_ratio:
-            # Calculate the vertical crop
             height_change = new_height - height
-            new_y1 = round(height_change / 2)  # Calculate the starting y-coordinate
-            new_y2 = min(new_y1 + height, new_height)  # Calculate the ending y-coordinate
-            self.clip = self.clip.cropped(y1=new_y1, y2=new_y2)  # Crop the video
+            new_y1 = round(height_change / 2)
+            new_y2 = min(new_y1 + height, new_height)
+            self.clip = self.clip.cropped(y1=new_y1, y2=new_y2)
         elif height_change_ratio > width_change_ratio:
-            # Calculate the horizontal crop
             width_change = new_width - width
-            new_x1 = round(width_change / 2)  # Calculate the starting x-coordinate
-            new_x2 = min(new_x1 + width, new_width)  # Calculate the ending x-coordinate
-            self.clip = self.clip.cropped(x1=new_x1, x2=new_x2)  # Crop the video
-            self.clip = self.clip.resized((width, height))  # Resize to the final dimensions
+            new_x1 = round(width_change / 2)
+            new_x2 = min(new_x1 + width, new_width)
+            self.clip = self.clip.cropped(x1=new_x1, x2=new_x2)
+            self.clip = self.clip.resized((width, height))
 
-        return self.clip  # Return the cropped video clip
+        return self.clip
 
 
 class Tools:
@@ -110,43 +99,25 @@ class Tools:
 class BackgroudVideo:
     @staticmethod
     def get_clip(duration: float) -> VideoFileClip:
-        """
-        Retrieves a random background video clip, trims it to the specified duration,
-        and crops it to the target resolution.
-
-        :param duration: The desired duration of the video clip.
-        :return: A cropped and trimmed VideoFileClip object.
-        """
-        # Select a random clip from the background videos directory
         full_clip = VideoFileClip(BackgroudVideo.select_clip())
-        
-        # Trim the selected clip to the specified duration
+
         trimmed_clip = BackgroudVideo.trim_clip(full_clip, duration)
 
-        # Crop the trimmed clip to 90% of its width
         width, height = trimmed_clip.size
         trimmed_clip = VideoTools(trimmed_clip).crop(round(width * 0.9), height)
 
-        # Get the target resolution for the final clip
         target_resolution = BackgroudVideo.get_target_resolution()
-        
-        # Crop the trimmed clip to the target resolution
+
         cropped_clip = VideoTools(trimmed_clip).crop(target_resolution[0], target_resolution[1])
 
-        # Return the cropped clip without audio
         return cropped_clip.without_audio()
-    
+
     @staticmethod
     def select_clip() -> str:
-        """
-        Selects a random video clip from the background videos directory.
-
-        :return: The file path of the selected video clip.
-        """
         clips = os.listdir(BACKGROUND_VIDEOS_DIR)
         clip = random.choice(clips)
         return os.path.join(BACKGROUND_VIDEOS_DIR, clip)
-    
+
     @staticmethod
     def trim_clip(clip: VideoFileClip, duration: float) -> VideoFileClip:
         """
@@ -159,54 +130,36 @@ class BackgroudVideo:
         """
         if clip.duration < duration:
             raise ValueError(f"Clip duration {clip.duration} is less than duration {duration}")
-        
-        # Randomly select a start time for the subclip
+
         clip_start_time = Tools.round_down(random.uniform(0, clip.duration - duration))
         return clip.subclipped(clip_start_time, clip_start_time + duration)
 
     @staticmethod
     def get_target_resolution():
-        """
-        Calculates the target resolution for the video clip based on the full resolution
-        and the percentage reduction for the main clip.
-
-        :return: A tuple containing the target width and height.
-        """
         return (
-            FULL_RESOLUTION[0], 
+            FULL_RESOLUTION[0],
             round(FULL_RESOLUTION[1] * (1 - (PERCENT_MAIN_CLIP / 100)))
         )
-    
+
     @staticmethod
     def format_all_background_clips():
-        """
-        Formats all background video clips in the specified directory by cropping them
-        to the full resolution and saving them back to the directory.
-
-        :return: None
-        """
         clips = os.listdir(BACKGROUND_VIDEOS_DIR)
         for clip_name in clips:
-            # Load each clip and crop it to the full resolution
             clip = VideoFileClip(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name))
             clip = VideoTools(clip).crop(FULL_RESOLUTION[0], FULL_RESOLUTION[1])
 
-            # Save the formatted clip back to the directory
             clip.write_videofile(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name), codec="libx264", audio_codec="aac")
-            
+
 class VideoCreation:
-    # Class attributes for video and audio clips
     clip = None
     audio = None
     background_clip = None
 
     def __init__(self, clip: VideoFileClip) -> None:
-        # Initialize the VideoCreation object with a video clip
         self.clip = clip
-        self.audio = clip.audio  # Extract audio from the video clip
+        self.audio = clip.audio
 
     def __deinit__(self) -> None:
-        # Clean up resources by closing video and background clips
         if self.clip:
             self.clip.close()
             self.clip = None
@@ -215,67 +168,57 @@ class VideoCreation:
             self.background_clip = None
 
     def process(self) -> VideoClip:
-        # Main processing function to create the final video
-        self.clip = self.create_final_clip()  # Create the final video clip
-        transcription = self.create_transcription(self.audio)  # Generate transcription from audio
-        self.clip = self.add_captions_to_video(self.clip, transcription)  # Add captions to the video
+        self.clip = self.create_final_clip()
+        transcription = self.create_transcription(self.audio)
+        self.clip = self.add_captions_to_video(self.clip, transcription)
 
-        return self.clip  # Return the processed video clip
+        return self.clip
 
     def create_final_clip(self):
-        # Create the final video clip with a background
-        self.background_clip = BackgroudVideo.get_clip(self.clip.duration)  # Get background video clip
+        self.background_clip = BackgroudVideo.get_clip(self.clip.duration)
 
-        _, background_height = self.background_clip.size  # Get the height of the background clip
-        target_dimensions = (FULL_RESOLUTION[0], FULL_RESOLUTION[1] - background_height)  # Calculate target dimensions
-        self.clip = VideoTools(self.clip).crop(target_dimensions[0], target_dimensions[1])  # Crop the main clip
+        _, background_height = self.background_clip.size
+        target_dimensions = (FULL_RESOLUTION[0], FULL_RESOLUTION[1] - background_height)
+        self.clip = VideoTools(self.clip).crop(target_dimensions[0], target_dimensions[1])
 
-        # Combine the main clip and background clip
         self.clip = clips_array([[self.clip], [self.background_clip]])
-        return self.clip  # Return the combined clip
+        return self.clip
 
     def create_transcription(self, audio):
-        # Generate transcription from the audio
         fd, file_path = tempfile.mkstemp(prefix="svc-audio-", suffix=".wav")
         os.close(fd)
         try:
             # Save 16 kHz mono WAV audio for ASR
             audio.write_audiofile(file_path, fps=16000, codec="pcm_s16le", ffmpeg_params=["-ac", "1"], logger=None)
 
-            # Transcribe the audio file into words with timestamps
             timestamps = transcriber.transcribe_words(file_path)
         finally:
-            # Clean up the temporary audio file
             try:
                 os.remove(file_path)
             except FileNotFoundError:
                 pass
 
-        return timestamps  # Return the list of timestamps and words
+        return timestamps
 
     def add_captions_to_video(self, clip, timestamps):
-        # Add captions to the video based on the provided timestamps
         if len(timestamps) == 0:
-            return clip  # Return the original clip if no timestamps
+            return clip
 
-        clips = []  # List to hold video clips with captions
-        previous_time = 0  # Track the end time of the previous caption
+        clips = []
+        previous_time = 0
 
-        queued_texts = []  # List to hold texts for the current caption
-        full_start = None  # Start time for the current caption
+        queued_texts = []
+        full_start = None
 
-        end = 0  # End time for the current caption
+        end = 0
 
-        # Iterate through the timestamps to create captions
         for pos, timestamp in enumerate(timestamps):
             start, end = timestamp["timestamp"]
             text = timestamp["text"]
 
-            # If there is a gap before the current caption, add the previous clip
             if start > previous_time and len(queued_texts) == 0:
                 clips.append(clip.subclipped(previous_time, start))
 
-            # Adjust the end time if there is a next timestamp
             if pos + 1 < len(timestamps):
                 next_timestamp_start = timestamps[pos + 1]['timestamp'][0]
                 if next_timestamp_start > end:
@@ -284,16 +227,14 @@ class VideoCreation:
                     else:
                         end = next_timestamp_start
 
-            # If the gap between captions is small, queue the text
             if end - previous_time < 0.3 and pos + 1 < len(timestamps):
                 if full_start is None:
                     full_start = start
                 queued_texts.append(text)
                 continue
 
-            queued_texts.append(text)  # Add the current text to the queue
+            queued_texts.append(text)
 
-            # Combine queued texts into a single caption
             if len(queued_texts) > 0:
                 text = " ".join(queued_texts)
                 queued_texts = []
@@ -301,11 +242,9 @@ class VideoCreation:
             if full_start is None:
                 full_start = start
 
-            # Skip if the caption exceeds the clip duration
             if full_start > clip.duration or end > clip.duration:
                 continue
 
-            # Add the captioned clip to the list
             clips.append(
                 self.add_text_to_video(
                     clip.subclipped(full_start, end),
@@ -313,21 +252,19 @@ class VideoCreation:
                 )
             )
 
-            previous_time = end  # Update the previous time
-            full_start = None  # Reset full start for the next caption
+            previous_time = end
+            full_start = None
 
-        # Add any remaining clip after the last caption
         if clip.duration - end > 0.01:
             clips.append(
                 clip.subclipped(end, clip.duration)
             )
 
-        clip = concatenate_videoclips(clips)  # Concatenate all clips with captions
+        clip = concatenate_videoclips(clips)
 
-        return clip  # Return the final clip with captions
+        return clip
 
     def add_text_to_video(self, clip, text):
-        # Add text overlay to the video clip
         text_image = self.create_text_image(
             text,
             os.path.join(FONTS_DIR, FONT_NAME),
@@ -335,30 +272,27 @@ class VideoCreation:
             clip.size[0]
         )
 
-        image_clip = ImageClip(np.array(text_image), duration=clip.duration)  # Create an image clip for the text
+        image_clip = ImageClip(np.array(text_image), duration=clip.duration)
 
-        y_offset = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))  # Calculate vertical position for text
-        clip = CompositeVideoClip([clip, image_clip.with_position((0, y_offset,))])  # Overlay text on the video
+        y_offset = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
+        clip = CompositeVideoClip([clip, image_clip.with_position((0, y_offset,))])
 
-        return clip  # Return the video clip with text
+        return clip
 
     def create_text_image(self, text, font_path, font_size, max_width):
-        # Create an image with the specified text
-        image = Image.new("RGBA", (max_width, font_size * 10), (0, 0, 0, 0))  # Create a transparent image
+        image = Image.new("RGBA", (max_width, font_size * 10), (0, 0, 0, 0))
 
-        font = ImageFont.truetype(font_path, font_size)  # Load the specified font
+        font = ImageFont.truetype(font_path, font_size)
 
-        draw = ImageDraw.Draw(image)  # Create a drawing context
+        draw = ImageDraw.Draw(image)
 
-        # Get the bounding box for the text
         _, _, w, h = draw.textbbox((0, 0), text, font=font)
 
-        # Draw the text on the image with stroke for better visibility
         draw.text(((max_width - w) / 2, round(h * 0.2)), text, font=font, fill="white", stroke_width=FONT_BORDER_WEIGHT, stroke_fill='black')
 
-        image = image.crop((0, 0, max_width, round(h * 1.6),))  # Crop the image to the desired size
+        image = image.crop((0, 0, max_width, round(h * 1.6),))
 
-        return image  # Return the created text image
+        return image
 
 
 import os
@@ -366,7 +300,6 @@ import time
 import multiprocessing
 from moviepy import VideoFileClip
 
-# Constants for input and output directories
 INPUT_VIDEOS_DIR = 'input_videos'
 OUTPUT_VIDEOS_DIR = 'output_videos'
 
@@ -378,29 +311,23 @@ def start_process(file_name, processes_status_dict):
         file_name (str): The name of the video file to process.
         processes_status_dict (dict): A dictionary to track the status of processes.
     """
-    
-    logging.info(f"Processing: {file_name}")  # Log the start of processing
-    start_time = time.time()  # Record the start time
 
-    # Get the current process identifier
+    logging.info(f"Processing: {file_name}")
+    start_time = time.time()
+
     process_identifier = multiprocessing.current_process().pid
 
-    # Mark the process as not finished in the status dictionary
     processes_status_dict[process_identifier] = False
 
-    # Load the input video file
     input_video = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, file_name))
-    
-    # Process the video using a custom VideoCreation class
-    output_video = VideoCreation(input_video).process()
-    
-    logging.info(f"Saving: {file_name}")  # Log the saving process
 
-    # Define the output directory and calculate the end time for the subclip
+    output_video = VideoCreation(input_video).process()
+
+    logging.info(f"Saving: {file_name}")
+
     output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
     end_time = round(((output_video.duration * 100 // output_video.fps) * output_video.fps / 100), 2)
-    
-    # Create a subclip of the output video
+
     output_video = output_video.subclipped(end_time=end_time)
 
     # Attempt to save the output video, retrying up to 5 times on failure
@@ -417,35 +344,30 @@ def start_process(file_name, processes_status_dict):
                 threads=NUM_THREADS,
                 logger=None
             )
-            break  # Exit the loop if saving is successful
+            break
         except Exception as error:
             if video_codec == VIDEO_CODEC:
                 video_codec = "libx264"
                 video_bitrate = None
             elif not isinstance(error, IOError):
                 raise
-            logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")  # Log the error and retry
-            time.sleep(1)  # Wait before retrying
+            logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")
+            time.sleep(1)
     else:
-        logging.error(f"ERROR Saving: {file_name}")  # Log if all attempts failed
-    
-    # Close the input and output video files to free resources
+        logging.error(f"ERROR Saving: {file_name}")
+
     input_video.close()
     output_video.close()
 
-    # Log the runtime of the processing
     logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
-    
-    # Mark the process as finished in the status dictionary
+
     processes_status_dict[process_identifier] = True
 
 
 if __name__ == '__main__':
-    # Create a manager for shared data between processes
     manager = multiprocessing.Manager()
-    processes_status_dict = manager.dict()  # Dictionary to track process statuses
+    processes_status_dict = manager.dict()
 
-    # Create input and output directories if they don't exist
     os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
     os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
 
@@ -453,32 +375,24 @@ if __name__ == '__main__':
     # so a plain list avoids multiprocessing.Queue's feeder-thread startup race
     pending_videos = os.listdir(INPUT_VIDEOS_DIR)
 
-    processes = {} # Dictionary to store processes
-    num_active_processes = 0  # Counter for active processes
+    processes = {}
+    num_active_processes = 0
     logging.info('STARTED')
 
-    # Main loop to manage video processing
     while (len(pending_videos) != 0) or (len(processes) != 0):
-        # Check if we can start a new process
         if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (len(pending_videos) != 0):
-            file_name = pending_videos.pop(0)  # Get the next video file name
+            file_name = pending_videos.pop(0)
 
-            # Create a new process for video processing
             p = multiprocessing.Process(target=start_process, args=(file_name, processes_status_dict))
-            p.start()  # Start the process
-            processes[p.pid] = p  # Store the process in the dictionary
-            num_active_processes += 1  # Increment the active process counter
+            p.start()
+            processes[p.pid] = p
+            num_active_processes += 1
 
-        # Check for completed processes
         for pid, complete in processes_status_dict.items():
-            if complete:  # If the process is complete
-                processes[pid].join()  # Wait for the process to finish
-                del processes[pid]  # Remove the process from the dictionary
-                del processes_status_dict[pid]  # Remove the status from the dictionary
-                num_active_processes -= 1  # Decrement the active process counter
+            if complete:
+                processes[pid].join()
+                del processes[pid]
+                del processes_status_dict[pid]
+                num_active_processes -= 1
 
     logging.info('MAIN PROCESS COMPLETE')
-
-
-
-
