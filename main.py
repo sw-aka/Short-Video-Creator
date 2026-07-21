@@ -2,7 +2,7 @@ import math
 import multiprocessing
 import os
 import random
-import shutil
+import tempfile
 import time
 import logging
 
@@ -236,24 +236,20 @@ class VideoCreation:
 
     def create_transcription(self, audio):
         # Generate transcription from the audio
-        os.makedirs("temp", exist_ok=True)  # Create a temporary directory for audio files
-
-        # Create a unique file name for the audio file (16 kHz mono WAV for ASR)
-        file_dir = f"temp/{time.time() * 10**20:.0f}.wav"
-        audio.write_audiofile(file_dir, fps=16000, codec="pcm_s16le", ffmpeg_params=["-ac", "1"], logger=None)  # Save audio to file
-
-        # Wait until the audio file is created
-        while not os.path.exists(file_dir):
-            time.sleep(0.01)
-
-        # Transcribe the audio file into words with timestamps
-        timestamps = transcriber.transcribe_words(file_dir)
-
-        # Clean up the temporary audio file
+        fd, file_path = tempfile.mkstemp(prefix="svc-audio-", suffix=".wav")
+        os.close(fd)
         try:
-            os.remove(file_dir)
-        except FileNotFoundError:
-            pass
+            # Save 16 kHz mono WAV audio for ASR
+            audio.write_audiofile(file_path, fps=16000, codec="pcm_s16le", ffmpeg_params=["-ac", "1"], logger=None)
+
+            # Transcribe the audio file into words with timestamps
+            timestamps = transcriber.transcribe_words(file_path)
+        finally:
+            # Clean up the temporary audio file
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                pass
 
         return timestamps  # Return the list of timestamps and words
 
@@ -367,7 +363,6 @@ class VideoCreation:
 
 import os
 import time
-import shutil
 import multiprocessing
 from moviepy import VideoFileClip
 
@@ -445,20 +440,7 @@ def start_process(file_name, processes_status_dict):
     processes_status_dict[process_identifier] = True
 
 
-def delete_temp_folder():
-    """
-    Delete the temporary folder used for processing videos.
-    """
-    try:
-        shutil.rmtree('temp')  # Remove the 'temp' directory and all its contents
-    except (PermissionError, FileNotFoundError):
-        pass  # Ignore permission errors if the folder cannot be deleted or is not found
-
-
 if __name__ == '__main__':
-    # Clean up any temporary folders before starting
-    delete_temp_folder()
-
     # Create a manager for shared data between processes
     manager = multiprocessing.Manager()
     processes_status_dict = manager.dict()  # Dictionary to track process statuses
@@ -495,10 +477,7 @@ if __name__ == '__main__':
                 del processes_status_dict[pid]  # Remove the status from the dictionary
                 num_active_processes -= 1  # Decrement the active process counter
 
-    # Clean up temporary folders after processing is complete
-    delete_temp_folder()
     logging.info('MAIN PROCESS COMPLETE')
-
 
 
 
