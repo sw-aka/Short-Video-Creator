@@ -295,14 +295,6 @@ class VideoCreation:
         return image
 
 
-import os
-import time
-import multiprocessing
-from moviepy import VideoFileClip
-
-INPUT_VIDEOS_DIR = 'input_videos'
-OUTPUT_VIDEOS_DIR = 'output_videos'
-
 def start_process(file_name, processes_status_dict):
     """
     Process a video file by applying transformations and saving the output.
