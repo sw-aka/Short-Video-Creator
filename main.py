@@ -375,14 +375,13 @@ from moviepy import VideoFileClip
 INPUT_VIDEOS_DIR = 'input_videos'
 OUTPUT_VIDEOS_DIR = 'output_videos'
 
-def start_process(file_name, processes_status_dict, video_queue: multiprocessing.Queue):
+def start_process(file_name, processes_status_dict):
     """
     Process a video file by applying transformations and saving the output.
 
     Args:
         file_name (str): The name of the video file to process.
         processes_status_dict (dict): A dictionary to track the status of processes.
-        video_queue (multiprocessing.Queue): A queue to manage video processing tasks.
     """
     
     logging.info(f"Processing: {file_name}")  # Log the start of processing
@@ -463,32 +462,27 @@ if __name__ == '__main__':
     # Create a manager for shared data between processes
     manager = multiprocessing.Manager()
     processes_status_dict = manager.dict()  # Dictionary to track process statuses
-    video_queue = multiprocessing.Queue()    # Queue to hold video file names
 
     # Create input and output directories if they don't exist
     os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
     os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
 
-    # List all video files in the input directory
-    input_video_names = os.listdir(INPUT_VIDEOS_DIR)
-
-    # Add video file names to the queue
-    for name in input_video_names:
-        video_queue.put(name)
+    # List of video files pending processing; only the parent process reads it,
+    # so a plain list avoids multiprocessing.Queue's feeder-thread startup race
+    pending_videos = os.listdir(INPUT_VIDEOS_DIR)
 
     processes = {} # Dictionary to store processes
     num_active_processes = 0  # Counter for active processes
     logging.info('STARTED')
 
     # Main loop to manage video processing
-    # Note: Queue.qsize() raises NotImplementedError on macOS, so use empty() instead
-    while (not video_queue.empty()) or (len(processes) != 0):
+    while (len(pending_videos) != 0) or (len(processes) != 0):
         # Check if we can start a new process
-        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (not video_queue.empty()):
-            file_name = video_queue.get()  # Get the next video file name from the queue
+        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (len(pending_videos) != 0):
+            file_name = pending_videos.pop(0)  # Get the next video file name
 
             # Create a new process for video processing
-            p = multiprocessing.Process(target=start_process, args=(file_name, processes_status_dict, video_queue))
+            p = multiprocessing.Process(target=start_process, args=(file_name, processes_status_dict))
             p.start()  # Start the process
             processes[p.pid] = p  # Store the process in the dictionary
             num_active_processes += 1  # Increment the active process counter
