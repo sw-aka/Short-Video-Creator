@@ -318,7 +318,13 @@ def start_process(file_name, processes_status_dict):
     logging.info(f"Saving: {file_name}")
 
     output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
-    end_time = round(((output_video.duration * 100 // output_video.fps) * output_video.fps / 100), 2)
+    end_time = math.floor(output_video.duration * output_video.fps) / output_video.fps
+    if end_time <= 0:
+        logging.error(f"ERROR Processing: {file_name}. Frame-aligned duration is nonpositive: {end_time}")
+        input_video.close()
+        output_video.close()
+        processes_status_dict[process_identifier] = True
+        return
 
     output_video = output_video.subclipped(end_time=end_time)
 
