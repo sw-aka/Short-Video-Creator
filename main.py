@@ -343,28 +343,37 @@ def start_process(file_name, processes_status_dict):
     # Attempt to save the output video, retrying up to 5 times on failure
     video_codec = VIDEO_CODEC
     video_bitrate = VIDEO_BITRATE
-    for pos in range(5):
+    fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
+    os.close(fd)
+    try:
+        for pos in range(5):
+            try:
+                output_video.write_videofile(
+                    output_dir,
+                    codec=video_codec,
+                    bitrate=video_bitrate,
+                    audio_codec="aac",
+                    temp_audiofile=temp_audio_path,
+                    fps=output_video.fps,
+                    threads=NUM_THREADS,
+                    logger=None
+                )
+                break
+            except Exception as error:
+                if video_codec == VIDEO_CODEC:
+                    video_codec = "libx264"
+                    video_bitrate = None
+                elif not isinstance(error, IOError):
+                    raise
+                logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")
+                time.sleep(1)
+        else:
+            logging.error(f"ERROR Saving: {file_name}")
+    finally:
         try:
-            output_video.write_videofile(
-                output_dir,
-                codec=video_codec,
-                bitrate=video_bitrate,
-                audio_codec="aac",
-                fps=output_video.fps,
-                threads=NUM_THREADS,
-                logger=None
-            )
-            break
-        except Exception as error:
-            if video_codec == VIDEO_CODEC:
-                video_codec = "libx264"
-                video_bitrate = None
-            elif not isinstance(error, IOError):
-                raise
-            logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")
-            time.sleep(1)
-    else:
-        logging.error(f"ERROR Saving: {file_name}")
+            os.remove(temp_audio_path)
+        except FileNotFoundError:
+            pass
 
     input_video.close()
     output_video.close()
