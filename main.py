@@ -396,6 +396,8 @@ def start_process(file_name, processes_status_dict):
     fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
     os.close(fd)
     try:
+        save_succeeded = False
+        last_error = None
         for pos in range(5):
             try:
                 output_video.write_videofile(
@@ -408,29 +410,39 @@ def start_process(file_name, processes_status_dict):
                     threads=NUM_THREADS,
                     logger=None
                 )
+                save_succeeded = True
                 break
             except Exception as error:
+                last_error = error
+                logging.exception(f"ERROR Saving: {file_name}. Attempt {pos + 1}/5 failed")
                 if video_codec == selected_video_codec:
                     video_codec = "libx264"
                     video_bitrate = None
                 elif not isinstance(error, IOError):
-                    raise
-                logging.warning(f"ERROR Saving: {file_name}. Trying again {pos + 1}/5")
+                    break
                 time.sleep(1)
-        else:
-            logging.error(f"ERROR Saving: {file_name}")
+
+        if not save_succeeded:
+            try:
+                os.remove(output_dir)
+            except FileNotFoundError:
+                pass
+            raise RuntimeError(f"Failed to save {file_name}") from last_error
+    except RuntimeError as error:
+        logging.error(f"FAILED: {file_name}: {error}")
     finally:
         try:
             os.remove(temp_audio_path)
         except FileNotFoundError:
             pass
 
-    input_video.close()
-    output_video.close()
+        try:
+            input_video.close()
+            output_video.close()
 
-    logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
-
-    processes_status_dict[process_identifier] = True
+            logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
+        finally:
+            processes_status_dict[process_identifier] = True
 
 
 if __name__ == '__main__':
