@@ -16,7 +16,7 @@ FONT_BORDER_WEIGHT = 10
 FULL_RESOLUTION = (1080, 1920) # Resolution of the outputted video (width, height) in pixels
 PERCENT_MAIN_CLIP = 40 # Percentage of output video height which is the main video (not the background video)
 TEXT_POSITION_PERCENT = 30 # Position of caption text as a percentage of video height (from top of video)
-VIDEO_CODEC = 'h264_videotoolbox' # Hardware encoder used to save the output video
+VIDEO_CODEC = None # Video encoder override; None automatically selects an available encoder
 VIDEO_BITRATE = '8M' # Explicit bitrate used to maintain output video quality
 
 ## Source folders

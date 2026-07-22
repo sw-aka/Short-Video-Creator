@@ -2,10 +2,13 @@ import math
 import multiprocessing
 import os
 import random
+import subprocess
+import sys
 import tempfile
 import time
 import logging
 
+import imageio_ffmpeg
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from moviepy import (VideoFileClip, clips_array, concatenate_videoclips,
@@ -44,6 +47,52 @@ def list_video_files(directory):
         and os.path.isfile(os.path.join(directory, name))
         and os.path.splitext(name)[1].lower() in video_extensions
     )
+
+
+_VIDEO_CODEC_CACHE = None
+
+
+def select_video_codec():
+    """Return the configured codec or probe ffmpeg once for a platform encoder."""
+    global _VIDEO_CODEC_CACHE
+
+    if _VIDEO_CODEC_CACHE is not None:
+        return _VIDEO_CODEC_CACHE
+
+    if VIDEO_CODEC:
+        _VIDEO_CODEC_CACHE = VIDEO_CODEC
+        return _VIDEO_CODEC_CACHE
+
+    if sys.platform == "darwin":
+        candidates = ("h264_videotoolbox",)
+    elif sys.platform == "win32":
+        candidates = ("h264_nvenc", "h264_qsv", "h264_amf")
+    elif sys.platform.startswith("linux"):
+        candidates = ("h264_nvenc", "h264_qsv", "h264_vaapi")
+    else:
+        candidates = ()
+
+    try:
+        result = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("ffmpeg encoder probe failed")
+        available_encoders = {
+            parts[1]
+            for line in result.stdout.splitlines()
+            if len(parts := line.split()) >= 2
+        }
+        _VIDEO_CODEC_CACHE = next(
+            (codec for codec in candidates if codec in available_encoders),
+            "libx264",
+        )
+    except Exception:
+        _VIDEO_CODEC_CACHE = "libx264"
+
+    return _VIDEO_CODEC_CACHE
 
 
 class VideoTools:
@@ -341,7 +390,8 @@ def start_process(file_name, processes_status_dict):
     output_video = output_video.subclipped(end_time=end_time)
 
     # Attempt to save the output video, retrying up to 5 times on failure
-    video_codec = VIDEO_CODEC
+    video_codec = select_video_codec()
+    selected_video_codec = video_codec
     video_bitrate = VIDEO_BITRATE
     fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
     os.close(fd)
@@ -360,7 +410,7 @@ def start_process(file_name, processes_status_dict):
                 )
                 break
             except Exception as error:
-                if video_codec == VIDEO_CODEC:
+                if video_codec == selected_video_codec:
                     video_codec = "libx264"
                     video_bitrate = None
                 elif not isinstance(error, IOError):
