@@ -69,7 +69,7 @@ def select_video_codec():
     elif sys.platform == "win32":
         candidates = ("h264_nvenc", "h264_qsv", "h264_amf")
     elif sys.platform.startswith("linux"):
-        candidates = ("h264_nvenc", "h264_qsv", "h264_vaapi")
+        candidates = ("h264_nvenc", "h264_qsv")
     else:
         candidates = ()
 
@@ -78,6 +78,7 @@ def select_video_codec():
             [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-encoders"],
             capture_output=True,
             text=True,
+            timeout=15,
         )
         if result.returncode != 0:
             raise RuntimeError("ffmpeg encoder probe failed")
@@ -369,68 +370,82 @@ def start_process(file_name):
     start_time = time.time()
 
     input_video = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, file_name))
-
-    output_video = VideoCreation(input_video).process()
-
-    logging.info(f"Saving: {file_name}")
-
-    output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
-    end_time = math.floor(output_video.duration * output_video.fps) / output_video.fps
-    if end_time <= 0:
-        logging.error(f"ERROR Processing: {file_name}. Frame-aligned duration is nonpositive: {end_time}")
-        input_video.close()
-        output_video.close()
-        return
-
-    output_video = output_video.subclipped(end_time=end_time)
-
-    # Attempt to save the output video, retrying up to 5 times on failure
-    video_codec = select_video_codec()
-    selected_video_codec = video_codec
-    video_bitrate = VIDEO_BITRATE
-    fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
-    os.close(fd)
+    output_video = None
+    video_creation = None
     try:
-        save_succeeded = False
-        last_error = None
-        for pos in range(5):
-            try:
-                output_video.write_videofile(
-                    output_dir,
-                    codec=video_codec,
-                    bitrate=video_bitrate,
-                    audio_codec="aac",
-                    temp_audiofile=temp_audio_path,
-                    fps=output_video.fps,
-                    threads=NUM_THREADS,
-                    logger=None
-                )
-                save_succeeded = True
-                break
-            except Exception as error:
-                last_error = error
-                logging.exception(f"ERROR Saving: {file_name}. Attempt {pos + 1}/5 failed")
-                if video_codec == selected_video_codec:
-                    video_codec = "libx264"
-                    video_bitrate = None
-                elif not isinstance(error, IOError):
-                    break
-                time.sleep(1)
+        video_creation = VideoCreation(input_video)
+        output_video = video_creation.process()
 
-        if not save_succeeded:
+        logging.info(f"Saving: {file_name}")
+
+        output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
+        end_time = math.floor(output_video.duration * output_video.fps) / output_video.fps
+        if end_time <= 0:
+            logging.error(f"ERROR Processing: {file_name}. Frame-aligned duration is nonpositive: {end_time}")
+            return
+
+        output_video = output_video.subclipped(end_time=end_time)
+
+        # Attempt to save the output video, retrying up to 5 times on failure
+        video_codec = select_video_codec()
+        video_bitrate = VIDEO_BITRATE
+        fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
+        os.close(fd)
+        try:
+            save_succeeded = False
+            last_error = None
+            for pos in range(5):
+                try:
+                    output_video.write_videofile(
+                        output_dir,
+                        codec=video_codec,
+                        bitrate=video_bitrate,
+                        audio_codec="aac",
+                        temp_audiofile=temp_audio_path,
+                        fps=output_video.fps,
+                        threads=NUM_THREADS,
+                        logger=None
+                    )
+                    save_succeeded = True
+                    break
+                except Exception as error:
+                    last_error = error
+                    logging.exception(f"ERROR Saving: {file_name}. Attempt {pos + 1}/5 failed")
+                    if video_codec != "libx264":
+                        video_codec = "libx264"
+                        video_bitrate = None
+                    elif not isinstance(error, IOError):
+                        break
+                    time.sleep(1)
+
+            if not save_succeeded:
+                try:
+                    os.remove(output_dir)
+                except OSError as error:
+                    if not isinstance(error, FileNotFoundError):
+                        logging.warning("Failed to remove partial output %s: %s", output_dir, error)
+                raise RuntimeError(f"Failed to save {file_name}") from last_error
+        finally:
             try:
-                os.remove(output_dir)
-            except FileNotFoundError:
-                pass
-            raise RuntimeError(f"Failed to save {file_name}") from last_error
+                os.remove(temp_audio_path)
+            except OSError as error:
+                if not isinstance(error, FileNotFoundError):
+                    logging.warning("Failed to remove temporary audio %s: %s", temp_audio_path, error)
     finally:
         try:
-            os.remove(temp_audio_path)
-        except FileNotFoundError:
+            input_video.close()
+        except Exception:
             pass
-
-        input_video.close()
-        output_video.close()
+        try:
+            if output_video is not None:
+                output_video.close()
+        except Exception:
+            pass
+        try:
+            if video_creation is not None and video_creation.background_clip is not None:
+                video_creation.background_clip.close()
+        except Exception:
+            pass
 
         logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
 
