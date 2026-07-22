@@ -1,4 +1,5 @@
 import math
+import concurrent.futures
 import multiprocessing
 import os
 import random
@@ -356,21 +357,16 @@ class VideoCreation:
         return image
 
 
-def start_process(file_name, processes_status_dict):
+def start_process(file_name):
     """
     Process a video file by applying transformations and saving the output.
 
     Args:
         file_name (str): The name of the video file to process.
-        processes_status_dict (dict): A dictionary to track the status of processes.
     """
 
     logging.info(f"Processing: {file_name}")
     start_time = time.time()
-
-    process_identifier = multiprocessing.current_process().pid
-
-    processes_status_dict[process_identifier] = False
 
     input_video = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, file_name))
 
@@ -384,7 +380,6 @@ def start_process(file_name, processes_status_dict):
         logging.error(f"ERROR Processing: {file_name}. Frame-aligned duration is nonpositive: {end_time}")
         input_video.close()
         output_video.close()
-        processes_status_dict[process_identifier] = True
         return
 
     output_video = output_video.subclipped(end_time=end_time)
@@ -428,27 +423,19 @@ def start_process(file_name, processes_status_dict):
             except FileNotFoundError:
                 pass
             raise RuntimeError(f"Failed to save {file_name}") from last_error
-    except RuntimeError as error:
-        logging.error(f"FAILED: {file_name}: {error}")
     finally:
         try:
             os.remove(temp_audio_path)
         except FileNotFoundError:
             pass
 
-        try:
-            input_video.close()
-            output_video.close()
+        input_video.close()
+        output_video.close()
 
-            logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
-        finally:
-            processes_status_dict[process_identifier] = True
+        logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
 
 
 if __name__ == '__main__':
-    manager = multiprocessing.Manager()
-    processes_status_dict = manager.dict()
-
     os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
     os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
 
@@ -456,24 +443,23 @@ if __name__ == '__main__':
     # so a plain list avoids multiprocessing.Queue's feeder-thread startup race
     pending_videos = list_video_files(INPUT_VIDEOS_DIR)
 
-    processes = {}
-    num_active_processes = 0
     logging.info('STARTED')
 
-    while (len(pending_videos) != 0) or (len(processes) != 0):
-        if (num_active_processes < MAX_NUMBER_OF_PROCESSES) and (len(pending_videos) != 0):
-            file_name = pending_videos.pop(0)
-
-            p = multiprocessing.Process(target=start_process, args=(file_name, processes_status_dict))
-            p.start()
-            processes[p.pid] = p
-            num_active_processes += 1
-
-        for pid, complete in processes_status_dict.items():
-            if complete:
-                processes[pid].join()
-                del processes[pid]
-                del processes_status_dict[pid]
-                num_active_processes -= 1
+    # Process videos in isolated spawned workers for consistent cross-platform behavior
+    process_context = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=MAX_NUMBER_OF_PROCESSES,
+        mp_context=process_context,
+    ) as executor:
+        futures = {
+            executor.submit(start_process, file_name): file_name
+            for file_name in pending_videos
+        }
+        for future in concurrent.futures.as_completed(futures):
+            file_name = futures[future]
+            try:
+                future.result()
+            except Exception:
+                logging.exception(f"Worker failed: {file_name}")
 
     logging.info('MAIN PROCESS COMPLETE')
