@@ -1,19 +1,18 @@
-import math
 import concurrent.futures
+import logging
+import math
 import multiprocessing
 import os
+from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import tempfile
 import time
-import logging
 
 import imageio_ffmpeg
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from moviepy import (VideoFileClip, clips_array, concatenate_videoclips,
-                     ImageClip, CompositeVideoClip, VideoClip)
 
 import transcriber
 from config import (
@@ -30,23 +29,26 @@ from config import (
     TEXT_POSITION_PERCENT,
     NUM_THREADS,
     VIDEO_BITRATE,
-    VIDEO_CODEC
+    VIDEO_CODEC,
 )
 
+
 logging.basicConfig(
-    level=getattr(logging, os.environ.get('LOG_LEVEL', 'WARNING').upper(), logging.WARNING),
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.WARNING),
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
 
 def list_video_files(directory):
     """Return sorted video file names from a directory."""
-    video_extensions = {'.mp4', '.mov', '.mkv', '.avi', '.webm'}
+    video_extensions = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+    directory = Path(directory)
     return sorted(
-        name for name in os.listdir(directory)
-        if not name.startswith('.')
-        and os.path.isfile(os.path.join(directory, name))
-        and os.path.splitext(name)[1].lower() in video_extensions
+        path.name
+        for path in directory.iterdir()
+        if not path.name.startswith(".")
+        and path.is_file()
+        and path.suffix.lower() in video_extensions
     )
 
 
@@ -97,370 +99,378 @@ def select_video_codec():
     return _VIDEO_CODEC_CACHE
 
 
-class VideoTools:
-    clip: VideoFileClip = None
-
-    def __init__(self, clip: VideoFileClip) -> None:
-        self.clip = clip
-
-    def __deinit__(self) -> None:
-        if self.clip:
-            self.clip.close()
-            self.clip = None
-
-    def crop(self, width: int, height: int) -> VideoFileClip:
-        """Crop the video clip to the specified width and height.
-
-        Args:
-            width (int): The desired width of the cropped video.
-            height (int): The desired height of the cropped video.
-
-        Returns:
-            VideoFileClip: The cropped video clip.
-        """
-        original_width, original_height = self.clip.size
-
-        width_change_ratio = width / original_width
-        height_change_ratio = height / original_height
-
-        max_ratio = max(width_change_ratio, height_change_ratio)
-
-        self.clip = self.clip.resized((
-            original_width * max_ratio,
-            original_height * max_ratio,
-        ))
-
-        new_width, new_height = self.clip.size
-
-        if width_change_ratio > height_change_ratio:
-            height_change = new_height - height
-            new_y1 = round(height_change / 2)
-            new_y2 = min(new_y1 + height, new_height)
-            self.clip = self.clip.cropped(y1=new_y1, y2=new_y2)
-        elif height_change_ratio > width_change_ratio:
-            width_change = new_width - width
-            new_x1 = round(width_change / 2)
-            new_x2 = min(new_x1 + width, new_width)
-            self.clip = self.clip.cropped(x1=new_x1, x2=new_x2)
-            self.clip = self.clip.resized((width, height))
-
-        return self.clip
-
-
 class Tools:
     @staticmethod
     def round_down(num: float, decimals: int = 0) -> float:
-        """
-        Rounds down a number to a specified number of decimal places.
-
-        :param num: The number to round down.
-        :param decimals: The number of decimal places to round to (default is 0).
-        :return: The rounded down number.
-        """
+        """Round down a number to the specified number of decimal places."""
         return math.floor(num * 10 ** decimals) / 10 ** decimals
 
-class BackgroudVideo:
-    @staticmethod
-    def get_clip(duration: float) -> VideoFileClip:
-        full_clip = VideoFileClip(BackgroudVideo.select_clip())
 
-        trimmed_clip = BackgroudVideo.trim_clip(full_clip, duration)
+def probe_video(video_path):
+    """Return duration, resolution, and frame rate parsed from ffmpeg stderr."""
+    result = subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-i", os.fspath(video_path)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    probe_text = result.stderr
 
-        width, height = trimmed_clip.size
-        trimmed_clip = VideoTools(trimmed_clip).crop(round(width * 0.9), height)
+    duration_match = re.search(
+        r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
+        probe_text,
+    )
+    video_line = next(
+        (
+            line
+            for line in probe_text.splitlines()
+            if "Stream #" in line
+            and "Video:" in line
+            and "attached pic" not in line.lower()
+        ),
+        "",
+    )
+    stream_index_match = re.search(r"Stream\s+#\d+:(\d+)", video_line)
+    resolution_match = re.search(r"(?<!\d)(\d{2,5})x(\d{2,5})(?!\d)", video_line)
+    fps_match = re.search(r"(\d+(?:\.\d+)?)\s+fps\b", video_line)
+    if fps_match is None:
+        fps_match = re.search(r"(\d+(?:\.\d+)?)\s+tbr\b", video_line)
 
-        target_resolution = BackgroudVideo.get_target_resolution()
+    missing_fields = []
+    if duration_match is None:
+        missing_fields.append("duration")
+    if not video_line or stream_index_match is None:
+        missing_fields.append("non-attached video stream")
+    if resolution_match is None:
+        missing_fields.append("resolution")
+    if fps_match is None:
+        missing_fields.append("fps")
+    if missing_fields:
+        message = f"Unable to probe {video_path}: missing {', '.join(missing_fields)}"
+        logging.error(message)
+        raise RuntimeError(message)
 
-        cropped_clip = VideoTools(trimmed_clip).crop(target_resolution[0], target_resolution[1])
+    hours, minutes, seconds = duration_match.groups()
+    duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    return {
+        "duration": duration,
+        "width": int(resolution_match.group(1)),
+        "height": int(resolution_match.group(2)),
+        "fps": float(fps_match.group(1)),
+        "video_stream_index": int(stream_index_match.group(1)),
+    }
 
-        return cropped_clip.without_audio()
 
-    @staticmethod
-    def select_clip() -> str:
-        clips = list_video_files(BACKGROUND_VIDEOS_DIR)
-        clip = random.choice(clips)
-        return os.path.join(BACKGROUND_VIDEOS_DIR, clip)
+def group_caption_segments(timestamps, clip_duration):
+    """Group word timestamps using the original caption timing behavior."""
+    if not timestamps:
+        return []
 
-    @staticmethod
-    def trim_clip(clip: VideoFileClip, duration: float) -> VideoFileClip:
-        """
-        Trims a video clip to a specified duration.
+    segments = []
+    previous_time = 0
+    queued_texts = []
+    full_start = None
 
-        :param clip: The VideoFileClip to trim.
-        :param duration: The desired duration of the trimmed clip.
-        :return: A trimmed VideoFileClip object.
-        :raises ValueError: If the clip's duration is less than the specified duration.
-        """
-        if clip.duration < duration:
-            raise ValueError(f"Clip duration {clip.duration} is less than duration {duration}")
+    for pos, timestamp in enumerate(timestamps):
+        start, end = timestamp["timestamp"]
+        text = timestamp["text"]
 
-        clip_start_time = Tools.round_down(random.uniform(0, clip.duration - duration))
-        return clip.subclipped(clip_start_time, clip_start_time + duration)
+        if pos + 1 < len(timestamps):
+            next_timestamp_start = timestamps[pos + 1]["timestamp"][0]
+            if next_timestamp_start > end:
+                end = min(end + 0.5, next_timestamp_start)
 
-    @staticmethod
-    def get_target_resolution():
-        return (
-            FULL_RESOLUTION[0],
-            round(FULL_RESOLUTION[1] * (1 - (PERCENT_MAIN_CLIP / 100)))
-        )
-
-    @staticmethod
-    def format_all_background_clips():
-        clips = list_video_files(BACKGROUND_VIDEOS_DIR)
-        for clip_name in clips:
-            clip = VideoFileClip(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name))
-            clip = VideoTools(clip).crop(FULL_RESOLUTION[0], FULL_RESOLUTION[1])
-
-            clip.write_videofile(os.path.join(BACKGROUND_VIDEOS_DIR, clip_name), codec="libx264", audio_codec="aac")
-
-class VideoCreation:
-    clip = None
-    audio = None
-    background_clip = None
-
-    def __init__(self, clip: VideoFileClip) -> None:
-        self.clip = clip
-        self.audio = clip.audio
-
-    def __deinit__(self) -> None:
-        if self.clip:
-            self.clip.close()
-            self.clip = None
-        if self.background_clip:
-            self.background_clip.close()
-            self.background_clip = None
-
-    def process(self) -> VideoClip:
-        self.clip = self.create_final_clip()
-        transcription = self.create_transcription(self.audio)
-        self.clip = self.add_captions_to_video(self.clip, transcription)
-
-        return self.clip
-
-    def create_final_clip(self):
-        self.background_clip = BackgroudVideo.get_clip(self.clip.duration)
-
-        _, background_height = self.background_clip.size
-        target_dimensions = (FULL_RESOLUTION[0], FULL_RESOLUTION[1] - background_height)
-        self.clip = VideoTools(self.clip).crop(target_dimensions[0], target_dimensions[1])
-
-        self.clip = clips_array([[self.clip], [self.background_clip]])
-        return self.clip
-
-    def create_transcription(self, audio):
-        fd, file_path = tempfile.mkstemp(prefix="svc-audio-", suffix=".wav")
-        os.close(fd)
-        try:
-            # Save 16 kHz mono WAV audio for ASR
-            audio.write_audiofile(file_path, fps=16000, codec="pcm_s16le", ffmpeg_params=["-ac", "1"], logger=None)
-
-            timestamps = transcriber.transcribe_words(file_path)
-        finally:
-            try:
-                os.remove(file_path)
-            except FileNotFoundError:
-                pass
-
-        return timestamps
-
-    def add_captions_to_video(self, clip, timestamps):
-        if len(timestamps) == 0:
-            return clip
-
-        clips = []
-        previous_time = 0
-
-        queued_texts = []
-        full_start = None
-
-        end = 0
-
-        for pos, timestamp in enumerate(timestamps):
-            start, end = timestamp["timestamp"]
-            text = timestamp["text"]
-
-            if start > previous_time and len(queued_texts) == 0:
-                clips.append(clip.subclipped(previous_time, start))
-
-            if pos + 1 < len(timestamps):
-                next_timestamp_start = timestamps[pos + 1]['timestamp'][0]
-                if next_timestamp_start > end:
-                    if next_timestamp_start - end > 0.5:
-                        end += 0.5
-                    else:
-                        end = next_timestamp_start
-
-            if end - previous_time < 0.3 and pos + 1 < len(timestamps):
-                if full_start is None:
-                    full_start = start
-                queued_texts.append(text)
-                continue
-
-            queued_texts.append(text)
-
-            if len(queued_texts) > 0:
-                text = " ".join(queued_texts)
-                queued_texts = []
-
+        if end - previous_time < 0.3 and pos + 1 < len(timestamps):
             if full_start is None:
                 full_start = start
+            queued_texts.append(text)
+            continue
 
-            if full_start > clip.duration or end > clip.duration:
-                continue
+        queued_texts.append(text)
+        text = " ".join(queued_texts)
+        queued_texts = []
 
-            clips.append(
-                self.add_text_to_video(
-                    clip.subclipped(full_start, end),
-                    text
-                )
-            )
+        if full_start is None:
+            full_start = start
 
-            previous_time = end
-            full_start = None
+        if full_start <= clip_duration and end <= clip_duration:
+            segments.append((full_start, end, text))
 
-        if clip.duration - end > 0.01:
-            clips.append(
-                clip.subclipped(end, clip.duration)
-            )
+        previous_time = end
+        full_start = None
 
-        clip = concatenate_videoclips(clips)
+    return segments
 
-        return clip
 
-    def add_text_to_video(self, clip, text):
-        text_image = self.create_text_image(
+def create_text_image(text, font_path, font_size, max_width):
+    """Render a transparent caption image with the configured font."""
+    image = Image.new("RGBA", (max_width, font_size * 10), (0, 0, 0, 0))
+    font = ImageFont.truetype(font_path, font_size)
+    draw = ImageDraw.Draw(image)
+    _, _, width, height = draw.textbbox((0, 0), text, font=font)
+    draw.text(
+        ((max_width - width) / 2, round(height * 0.2)),
+        text,
+        font=font,
+        fill="white",
+        stroke_width=FONT_BORDER_WEIGHT,
+        stroke_fill="black",
+    )
+    return image.crop((0, 0, max_width, round(height * 1.6)))
+
+
+def create_caption_sprite(caption_segments, sprite_path):
+    """Render captions into uniform rows of one transparent sprite sheet."""
+    caption_images = [
+        create_text_image(
             text,
-            os.path.join(FONTS_DIR, FONT_NAME),
+            Path(FONTS_DIR) / FONT_NAME,
             FONT_SIZE,
-            clip.size[0]
+            FULL_RESOLUTION[0],
         )
+        for _, _, text in caption_segments
+    ]
+    row_height = max((image.height for image in caption_images), default=1)
+    sprite = Image.new(
+        "RGBA",
+        (FULL_RESOLUTION[0], row_height * max(1, len(caption_images))),
+        (0, 0, 0, 0),
+    )
+    for pos, image in enumerate(caption_images):
+        sprite.paste(image, (0, pos * row_height), image)
+    sprite.save(sprite_path)
+    return row_height
 
-        image_clip = ImageClip(np.array(text_image), duration=clip.duration)
 
-        y_offset = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
-        clip = CompositeVideoClip([clip, image_clip.with_position((0, y_offset,))])
+def extract_audio(input_path, audio_path):
+    """Extract the main audio as a 16 kHz mono PCM WAV for ASR."""
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        os.fspath(input_path),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        os.fspath(audio_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(f"Audio extraction failed:\n{result.stderr}")
 
-        return clip
 
-    def create_text_image(self, text, font_path, font_size, max_width):
-        image = Image.new("RGBA", (max_width, font_size * 10), (0, 0, 0, 0))
+def select_background(duration):
+    """Select a random background and a whole-second start offset."""
+    background_name = random.choice(list_video_files(BACKGROUND_VIDEOS_DIR))
+    background_path = Path(BACKGROUND_VIDEOS_DIR) / background_name
+    metadata = probe_video(background_path)
+    if metadata["duration"] < duration:
+        raise ValueError(
+            f"Clip duration {metadata['duration']} is less than duration {duration}"
+        )
+    start_time = Tools.round_down(random.uniform(0, metadata["duration"] - duration))
+    return background_path, start_time
 
-        font = ImageFont.truetype(font_path, font_size)
 
-        draw = ImageDraw.Draw(image)
+def build_filter_complex(fps, video_stream_index, caption_segments, caption_row_height):
+    """Build the stacked-video and timed-caption ffmpeg filter graph."""
+    main_height = round(FULL_RESOLUTION[1] * (PERCENT_MAIN_CLIP / 100))
+    background_height = FULL_RESOLUTION[1] - main_height
+    filters = [
+        f"[0:{video_stream_index}]fps={fps},"
+        f"scale={FULL_RESOLUTION[0]}:{main_height}:"
+        "force_original_aspect_ratio=increase,"
+        f"crop={FULL_RESOLUTION[0]}:{main_height},setsar=1[main]",
+        "[1:v]"
+        "fps={fps},crop=trunc(iw*0.9/2)*2:trunc(ih/2)*2,"
+        "scale={width}:{height}:force_original_aspect_ratio=increase,"
+        "crop={width}:{height},setsar=1[background]".format(
+            fps=fps,
+            width=FULL_RESOLUTION[0],
+            height=background_height,
+        ),
+        "[main][background]vstack=inputs=2[stacked]",
+    ]
 
-        _, _, w, h = draw.textbbox((0, 0), text, font=font)
+    current_label = "stacked"
+    caption_y = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
+    for pos, (start, end, _) in enumerate(caption_segments):
+        caption_label = f"caption{pos}"
+        output_label = f"captioned{pos}"
+        filters.append(
+            f"[2:v]crop={FULL_RESOLUTION[0]}:{caption_row_height}:"
+            f"0:{pos * caption_row_height}[{caption_label}]"
+        )
+        filters.append(
+            f"[{current_label}][{caption_label}]overlay=x=0:y={caption_y}:"
+            f"eof_action=pass:shortest=0:repeatlast=1:"
+            f"enable='between(t,{start:.6f},{end:.6f})'[{output_label}]"
+        )
+        current_label = output_label
 
-        draw.text(((max_width - w) / 2, round(h * 0.2)), text, font=font, fill="white", stroke_width=FONT_BORDER_WEIGHT, stroke_fill='black')
+    return ";".join(filters), current_label
 
-        image = image.crop((0, 0, max_width, round(h * 1.6),))
 
-        return image
+def render_video(
+    input_path,
+    background_path,
+    background_start,
+    duration,
+    fps,
+    sprite_path,
+    filter_script_path,
+    output_path,
+    codec,
+):
+    """Render a complete output with one ffmpeg invocation."""
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-nostdin",
+        "-hide_banner",
+        "-y",
+        "-i",
+        os.fspath(input_path),
+        "-ss",
+        str(background_start),
+        "-t",
+        f"{duration:.6f}",
+        "-i",
+        os.fspath(background_path),
+        "-loop",
+        "1",
+        "-framerate",
+        str(fps),
+        "-i",
+        os.fspath(sprite_path),
+    ]
+
+    command.extend(
+        [
+            "-filter_complex_script",
+            os.fspath(filter_script_path),
+            "-map",
+            "[output]",
+            "-map",
+            "0:a:0",
+            "-t",
+            f"{duration:.6f}",
+            "-c:v",
+            codec,
+            "-b:v",
+            VIDEO_BITRATE,
+            "-c:a",
+            "aac",
+        ]
+    )
+    if codec == "libx264":
+        command.extend(["-preset", "veryfast", "-threads", str(NUM_THREADS)])
+    command.extend(["-pix_fmt", "yuv420p", "-movflags", "+faststart", os.fspath(output_path)])
+
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=max(120, duration * 10),
+    )
 
 
 def start_process(file_name):
-    """
-    Process a video file by applying transformations and saving the output.
-
-    Args:
-        file_name (str): The name of the video file to process.
-    """
-
+    """Process a video file by applying transformations and saving the output."""
     logging.info(f"Processing: {file_name}")
     start_time = time.time()
+    input_path = Path(INPUT_VIDEOS_DIR) / file_name
+    output_path = Path(OUTPUT_VIDEOS_DIR) / file_name
 
-    input_video = VideoFileClip(os.path.join(INPUT_VIDEOS_DIR, file_name))
-    output_video = None
-    video_creation = None
     try:
-        video_creation = VideoCreation(input_video)
-        output_video = video_creation.process()
+        main_metadata = probe_video(input_path)
+        duration = main_metadata["duration"]
+        fps = main_metadata["fps"]
+        background_path, background_start = select_background(duration)
+        render_duration = math.floor(duration * fps) / fps
 
-        logging.info(f"Saving: {file_name}")
+        with tempfile.TemporaryDirectory(prefix="svc-") as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            audio_path = temporary_path / "audio.wav"
+            sprite_path = temporary_path / "captions.png"
+            filter_script_path = temporary_path / "filters.txt"
+            extract_audio(input_path, audio_path)
+            timestamps = transcriber.transcribe_words(os.fspath(audio_path))
+            caption_segments = group_caption_segments(timestamps, duration)
+            caption_row_height = create_caption_sprite(caption_segments, sprite_path)
+            filter_complex, video_label = build_filter_complex(
+                fps,
+                main_metadata["video_stream_index"],
+                caption_segments,
+                caption_row_height,
+            )
+            filter_script_path.write_text(
+                f"{filter_complex};[{video_label}]null[output]",
+                encoding="utf-8",
+            )
 
-        output_dir = os.path.join(OUTPUT_VIDEOS_DIR, file_name)
-        end_time = math.floor(output_video.duration * output_video.fps) / output_video.fps
-        if end_time <= 0:
-            logging.error(f"ERROR Processing: {file_name}. Frame-aligned duration is nonpositive: {end_time}")
-            return
+            logging.info(f"Saving: {file_name}")
+            selected_codec = select_video_codec()
+            codecs = [selected_codec]
+            if selected_codec != "libx264":
+                codecs.append("libx264")
 
-        output_video = output_video.subclipped(end_time=end_time)
-
-        # Attempt to save the output video, retrying up to 5 times on failure
-        video_codec = select_video_codec()
-        video_bitrate = VIDEO_BITRATE
-        fd, temp_audio_path = tempfile.mkstemp(prefix="svc-video-audio-", suffix=".m4a")
-        os.close(fd)
-        try:
-            save_succeeded = False
             last_error = None
-            for pos in range(5):
+            for codec in codecs:
                 try:
-                    output_video.write_videofile(
-                        output_dir,
-                        codec=video_codec,
-                        bitrate=video_bitrate,
-                        audio_codec="aac",
-                        temp_audiofile=temp_audio_path,
-                        fps=output_video.fps,
-                        threads=NUM_THREADS,
-                        logger=None
+                    result = render_video(
+                        input_path,
+                        background_path,
+                        background_start,
+                        render_duration,
+                        fps,
+                        sprite_path,
+                        filter_script_path,
+                        output_path,
+                        codec,
                     )
-                    save_succeeded = True
-                    break
-                except Exception as error:
-                    last_error = error
-                    logging.exception(f"ERROR Saving: {file_name}. Attempt {pos + 1}/5 failed")
-                    if video_codec != "libx264":
-                        video_codec = "libx264"
-                        video_bitrate = None
-                    elif not isinstance(error, IOError):
+                    if result.returncode == 0:
+                        last_error = None
                         break
-                    time.sleep(1)
+                    last_error = result.stderr
+                except Exception as error:
+                    last_error = str(error)
+                logging.error(
+                    "ERROR Saving: %s. Codec %s failed:\n%s",
+                    file_name,
+                    codec,
+                    last_error,
+                )
 
-            if not save_succeeded:
+            if last_error is not None:
                 try:
-                    os.remove(output_dir)
+                    output_path.unlink()
+                except FileNotFoundError:
+                    pass
                 except OSError as error:
-                    if not isinstance(error, FileNotFoundError):
-                        logging.warning("Failed to remove partial output %s: %s", output_dir, error)
-                raise RuntimeError(f"Failed to save {file_name}") from last_error
-        finally:
-            try:
-                os.remove(temp_audio_path)
-            except OSError as error:
-                if not isinstance(error, FileNotFoundError):
-                    logging.warning("Failed to remove temporary audio %s: %s", temp_audio_path, error)
+                    logging.warning("Failed to remove partial output %s: %s", output_path, error)
+                raise RuntimeError(f"Failed to save {file_name}:\n{last_error}")
     finally:
-        try:
-            input_video.close()
-        except Exception:
-            pass
-        try:
-            if output_video is not None:
-                output_video.close()
-        except Exception:
-            pass
-        try:
-            if video_creation is not None and video_creation.background_clip is not None:
-                video_creation.background_clip.close()
-        except Exception:
-            pass
-
         logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
 
 
-if __name__ == '__main__':
-    os.makedirs(INPUT_VIDEOS_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_VIDEOS_DIR, exist_ok=True)
+if __name__ == "__main__":
+    Path(INPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
+    Path(OUTPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
 
-    # List of video files pending processing; only the parent process reads it,
-    # so a plain list avoids multiprocessing.Queue's feeder-thread startup race
+    # Only the parent process reads this list, avoiding a queue feeder startup race.
     pending_videos = list_video_files(INPUT_VIDEOS_DIR)
+    logging.info("STARTED")
 
-    logging.info('STARTED')
-
-    # Process videos in isolated spawned workers for consistent cross-platform behavior
     process_context = multiprocessing.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=MAX_NUMBER_OF_PROCESSES,
@@ -477,4 +487,4 @@ if __name__ == '__main__':
             except Exception:
                 logging.exception(f"Worker failed: {file_name}")
 
-    logging.info('MAIN PROCESS COMPLETE')
+    logging.info("MAIN PROCESS COMPLETE")
