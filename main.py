@@ -1,4 +1,6 @@
 import concurrent.futures
+from fractions import Fraction
+import json
 import logging
 import math
 import multiprocessing
@@ -6,6 +8,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -108,7 +111,53 @@ class Tools:
 
 
 def probe_video(video_path):
-    """Return duration, resolution, and frame rate parsed from ffmpeg stderr."""
+    """Return duration, resolution, and frame rate for a video."""
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path is not None:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                os.fspath(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Unable to probe {video_path}: {result.stderr.strip()}")
+
+        try:
+            metadata = json.loads(result.stdout)
+            video_stream = next(
+                stream
+                for stream in metadata.get("streams", [])
+                if stream.get("codec_type") == "video"
+                and not stream.get("disposition", {}).get("attached_pic", 0)
+            )
+            fps = Fraction(video_stream["r_frame_rate"])
+            duration = float(metadata["format"]["duration"])
+            width = int(video_stream["width"])
+            height = int(video_stream["height"])
+            video_stream_index = int(video_stream["index"])
+            if fps <= 0:
+                raise ValueError("frame rate must be positive")
+        except (KeyError, StopIteration, TypeError, ValueError, ZeroDivisionError) as error:
+            raise RuntimeError(f"Unable to probe {video_path}: invalid metadata") from error
+
+        return {
+            "duration": duration,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "video_stream_index": video_stream_index,
+        }
+
     result = subprocess.run(
         [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-i", os.fspath(video_path)],
         capture_output=True,
@@ -157,7 +206,7 @@ def probe_video(video_path):
         "duration": duration,
         "width": int(resolution_match.group(1)),
         "height": int(resolution_match.group(2)),
-        "fps": float(fps_match.group(1)),
+        "fps": Fraction(fps_match.group(1)),
         "video_stream_index": int(stream_index_match.group(1)),
     }
 
@@ -416,7 +465,7 @@ def start_process(file_name):
         duration = main_metadata["duration"]
         fps = main_metadata["fps"]
         background_path, background_start = select_background(duration)
-        render_duration = math.floor(duration * fps) / fps
+        render_duration = float(math.floor(Fraction(str(duration)) * fps) / fps)
 
         with tempfile.TemporaryDirectory(prefix="svc-") as temporary_directory:
             temporary_path = Path(temporary_directory)
