@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 import logging
 import os
+import wave
 
 import onnx_asr
 
@@ -50,7 +51,7 @@ def _get_model():
     return _model
 
 
-def _merge_tokens_into_words(tokens, timestamps):
+def _merge_tokens_into_words(tokens, timestamps, clip_duration=None):
     """Merge BPE tokens into words with start/end times.
 
     Tokens beginning with a space start a new word; tokens without a
@@ -61,6 +62,7 @@ def _merge_tokens_into_words(tokens, timestamps):
 
     :param tokens: List of BPE token strings (e.g. [' The', ' qu', 'ick']).
     :param timestamps: List of start times in seconds, one per token.
+    :param clip_duration: Optional clip end used to clamp the final word.
     :return: A list of dicts: {'timestamp': (start, end), 'text': word}.
     """
     words = []
@@ -81,6 +83,8 @@ def _merge_tokens_into_words(tokens, timestamps):
             end = min(words[pos + 1]["start"], start + MAX_WORD_DURATION)
         else:
             end = start + MAX_WORD_DURATION
+            if clip_duration is not None:
+                end = min(end, clip_duration)
         results.append({
             "timestamp": (start, end),
             "text": word["text"],
@@ -103,7 +107,10 @@ def transcribe_words(audio_path):
     if not result.text.strip():
         return []
 
-    return _merge_tokens_into_words(result.tokens, result.timestamps)
+    with wave.open(audio_path, "rb") as audio_file:
+        clip_duration = audio_file.getnframes() / audio_file.getframerate()
+
+    return _merge_tokens_into_words(result.tokens, result.timestamps, clip_duration)
 
 
 if __name__ == "__main__":

@@ -274,8 +274,8 @@ def group_caption_segments(timestamps, clip_duration):
         if full_start is None:
             full_start = start
 
-        if full_start <= clip_duration and end <= clip_duration:
-            segments.append((full_start, end, text))
+        if full_start < clip_duration:
+            segments.append((full_start, min(end, clip_duration), text))
 
         previous_time = end
         full_start = None
