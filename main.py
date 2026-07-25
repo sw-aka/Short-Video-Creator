@@ -36,10 +36,16 @@ from config import (
 )
 
 
-logging.basicConfig(
-    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.WARNING),
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+def configure_logging():
+    """Configure logging in the parent or a spawned worker process."""
+    logging.basicConfig(
+        level=getattr(
+            logging,
+            os.environ.get("LOG_LEVEL", "INFO").upper(),
+            logging.WARNING,
+        ),
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
 
 
 def list_video_files(directory):
@@ -485,6 +491,7 @@ def render_video(
 
 def start_process(file_name):
     """Process a video file by applying transformations and saving the output."""
+    configure_logging()
     logging.info(f"Processing: {file_name}")
     start_time = time.time()
     input_path = Path(INPUT_VIDEOS_DIR) / file_name
@@ -573,6 +580,7 @@ def start_process(file_name):
 
 
 if __name__ == "__main__":
+    configure_logging()
     Path(INPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
     Path(OUTPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
 
