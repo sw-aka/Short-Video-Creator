@@ -15,7 +15,7 @@ import tempfile
 import time
 
 import imageio_ffmpeg
-from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageFont
 
 import transcriber
 from config import (
@@ -283,44 +283,71 @@ def group_caption_segments(timestamps, clip_duration):
     return segments
 
 
-def create_text_image(text, font_path, font_size, max_width):
-    """Render a transparent caption image with the configured font."""
-    image = Image.new("RGBA", (max_width, font_size * 10), (0, 0, 0, 0))
-    font = ImageFont.truetype(font_path, font_size)
-    draw = ImageDraw.Draw(image)
-    _, _, width, height = draw.textbbox((0, 0), text, font=font)
-    draw.text(
-        ((max_width - width) / 2, round(height * 0.2)),
-        text,
-        font=font,
-        fill="white",
-        stroke_width=FONT_BORDER_WEIGHT,
-        stroke_fill="black",
+def format_ass_timestamp(seconds):
+    """Format seconds as an ASS H:MM:SS.cc timestamp."""
+    total_centiseconds = max(0, round(seconds * 100))
+    total_seconds, centiseconds = divmod(total_centiseconds, 100)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
+
+
+def escape_ass_text(text):
+    """Escape text that libass would otherwise interpret as markup."""
+    return (
+        text.replace("\\", r"\\")
+        .replace("{", r"\{")
+        .replace("}", r"\}")
+        .replace("\r\n", r"\N")
+        .replace("\r", r"\N")
+        .replace("\n", r"\N")
     )
-    return image.crop((0, 0, max_width, round(height * 1.6)))
 
 
-def create_caption_sprite(caption_segments, sprite_path):
-    """Render captions into uniform rows of one transparent sprite sheet."""
-    caption_images = [
-        create_text_image(
-            text,
-            Path(FONTS_DIR) / FONT_NAME,
-            FONT_SIZE,
-            FULL_RESOLUTION[0],
-        )
-        for _, _, text in caption_segments
+def write_ass_captions(caption_segments, subtitle_path):
+    """Write timed captions using the configured font and placement."""
+    font_path = Path(FONTS_DIR) / FONT_NAME
+    font_family = ImageFont.truetype(font_path, FONT_SIZE).getname()[0]
+    margin_vertical = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {FULL_RESOLUTION[0]}",
+        f"PlayResY: {FULL_RESOLUTION[1]}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,{font_family},{FONT_SIZE},&H00FFFFFF,&H00FFFFFF,"
+        f"&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,"
+        f"{FONT_BORDER_WEIGHT},0,8,40,40,{margin_vertical},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+        "Effect, Text",
     ]
-    row_height = max((image.height for image in caption_images), default=1)
-    sprite = Image.new(
-        "RGBA",
-        (FULL_RESOLUTION[0], row_height * max(1, len(caption_images))),
-        (0, 0, 0, 0),
+    lines.extend(
+        "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}".format(
+            start=format_ass_timestamp(start),
+            end=format_ass_timestamp(end),
+            text=escape_ass_text(text),
+        )
+        for start, end, text in caption_segments
     )
-    for pos, image in enumerate(caption_images):
-        sprite.paste(image, (0, pos * row_height), image)
-    sprite.save(sprite_path)
-    return row_height
+    subtitle_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def escape_filter_path(path):
+    """Escape a path for use as a quoted ffmpeg filter option."""
+    return (
+        Path(path).resolve().as_posix()
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+    )
 
 
 def extract_audio(input_path, audio_path):
@@ -372,8 +399,8 @@ def select_background(duration):
     return background_path, start_time
 
 
-def build_filter_complex(fps, video_stream_index, caption_segments, caption_row_height):
-    """Build the stacked-video and timed-caption ffmpeg filter graph."""
+def build_filter_complex(fps, video_stream_index, subtitle_path):
+    """Build the stacked-video and ASS-caption ffmpeg filter graph."""
     main_height = round(FULL_RESOLUTION[1] * (PERCENT_MAIN_CLIP / 100))
     background_height = FULL_RESOLUTION[1] - main_height
     filters = [
@@ -390,25 +417,12 @@ def build_filter_complex(fps, video_stream_index, caption_segments, caption_row_
             height=background_height,
         ),
         "[main][background]vstack=inputs=2[stacked]",
+        "[stacked]subtitles=filename='{subtitle}':fontsdir='{fonts}'[output]".format(
+            subtitle=escape_filter_path(subtitle_path),
+            fonts=escape_filter_path(FONTS_DIR),
+        ),
     ]
-
-    current_label = "stacked"
-    caption_y = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
-    for pos, (start, end, _) in enumerate(caption_segments):
-        caption_label = f"caption{pos}"
-        output_label = f"captioned{pos}"
-        filters.append(
-            f"[2:v]crop={FULL_RESOLUTION[0]}:{caption_row_height}:"
-            f"0:{pos * caption_row_height}[{caption_label}]"
-        )
-        filters.append(
-            f"[{current_label}][{caption_label}]overlay=x=0:y={caption_y}:"
-            f"eof_action=pass:shortest=0:repeatlast=1:"
-            f"enable='between(t,{start:.6f},{end:.6f})'[{output_label}]"
-        )
-        current_label = output_label
-
-    return ";".join(filters), current_label
+    return ";".join(filters)
 
 
 def render_video(
@@ -417,7 +431,6 @@ def render_video(
     background_start,
     duration,
     fps,
-    sprite_path,
     filter_script_path,
     output_path,
     codec,
@@ -427,6 +440,8 @@ def render_video(
         imageio_ffmpeg.get_ffmpeg_exe(),
         "-nostdin",
         "-hide_banner",
+        "-loglevel",
+        "error",
         "-y",
         "-i",
         os.fspath(input_path),
@@ -436,12 +451,6 @@ def render_video(
         f"{duration:.6f}",
         "-i",
         os.fspath(background_path),
-        "-loop",
-        "1",
-        "-framerate",
-        str(fps),
-        "-i",
-        os.fspath(sprite_path),
     ]
 
     command.extend(
@@ -501,22 +510,18 @@ def start_process(file_name):
         with tempfile.TemporaryDirectory(prefix="svc-") as temporary_directory:
             temporary_path = Path(temporary_directory)
             audio_path = temporary_path / "audio.wav"
-            sprite_path = temporary_path / "captions.png"
+            subtitle_path = temporary_path / "captions.ass"
             filter_script_path = temporary_path / "filters.txt"
             extract_audio(input_path, audio_path)
             timestamps = transcriber.transcribe_words(os.fspath(audio_path))
             caption_segments = group_caption_segments(timestamps, duration)
-            caption_row_height = create_caption_sprite(caption_segments, sprite_path)
-            filter_complex, video_label = build_filter_complex(
+            write_ass_captions(caption_segments, subtitle_path)
+            filter_complex = build_filter_complex(
                 fps,
                 main_metadata["video_stream_index"],
-                caption_segments,
-                caption_row_height,
+                subtitle_path,
             )
-            filter_script_path.write_text(
-                f"{filter_complex};[{video_label}]null[output]",
-                encoding="utf-8",
-            )
+            filter_script_path.write_text(filter_complex, encoding="utf-8")
 
             logging.info(f"Saving: {file_name}")
             selected_codec = select_video_codec()
@@ -533,7 +538,6 @@ def start_process(file_name):
                         background_start,
                         render_duration,
                         fps,
-                        sprite_path,
                         filter_script_path,
                         temporary_output_path,
                         codec,
