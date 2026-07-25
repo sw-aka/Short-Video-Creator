@@ -554,8 +554,8 @@ def start_process(file_name):
     try:
         output_path.unlink(missing_ok=True)
         with tempfile.NamedTemporaryFile(
-            prefix=f".{output_path.stem}.",
-            suffix=".tmp.mp4",
+            prefix=f".{output_path.stem}.tmp.",
+            suffix=output_path.suffix,
             dir=output_path.parent,
             delete=False,
         ) as temporary_output:
