@@ -53,6 +53,7 @@ def list_video_files(directory):
 
 
 _VIDEO_CODEC_CACHE = None
+_BACKGROUND_METADATA_CACHE = {}
 
 
 def select_video_codec():
@@ -271,13 +272,22 @@ def extract_audio(input_path, audio_path):
 
 def select_background(duration):
     """Select a random background and a whole-second start offset."""
-    background_name = random.choice(list_video_files(BACKGROUND_VIDEOS_DIR))
-    background_path = Path(BACKGROUND_VIDEOS_DIR) / background_name
-    metadata = probe_video(background_path)
-    if metadata["duration"] < duration:
+    eligible_backgrounds = []
+    for background_name in list_video_files(BACKGROUND_VIDEOS_DIR):
+        background_path = Path(BACKGROUND_VIDEOS_DIR) / background_name
+        metadata = _BACKGROUND_METADATA_CACHE.get(background_path)
+        if metadata is None:
+            metadata = probe_video(background_path)
+            _BACKGROUND_METADATA_CACHE[background_path] = metadata
+        if metadata["duration"] >= duration:
+            eligible_backgrounds.append((background_path, metadata))
+
+    if not eligible_backgrounds:
         raise ValueError(
-            f"Clip duration {metadata['duration']} is less than duration {duration}"
+            f"No background video is at least {duration:.3f} seconds long"
         )
+
+    background_path, metadata = random.choice(eligible_backgrounds)
     start_time = Tools.round_down(random.uniform(0, metadata["duration"] - duration))
     return background_path, start_time
 
