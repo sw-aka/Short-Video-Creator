@@ -93,14 +93,45 @@ def select_video_codec():
             for line in result.stdout.splitlines()
             if len(parts := line.split()) >= 2
         }
-        _VIDEO_CODEC_CACHE = next(
-            (codec for codec in candidates if codec in available_encoders),
-            "libx264",
-        )
+        _VIDEO_CODEC_CACHE = "libx264"
+        for codec in candidates:
+            if codec not in available_encoders:
+                continue
+            encode_test = subprocess.run(
+                [
+                    imageio_ffmpeg.get_ffmpeg_exe(),
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=size=64x64:duration=0.1",
+                    "-c:v",
+                    codec,
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if encode_test.returncode == 0:
+                _VIDEO_CODEC_CACHE = codec
+                break
     except Exception:
         _VIDEO_CODEC_CACHE = "libx264"
 
     return _VIDEO_CODEC_CACHE
+
+
+def invalidate_video_codec(codec):
+    """Stop reusing a hardware codec after a render failure."""
+    global _VIDEO_CODEC_CACHE
+    if codec != "libx264" and _VIDEO_CODEC_CACHE == codec:
+        _VIDEO_CODEC_CACHE = "libx264"
 
 
 class Tools:
@@ -513,6 +544,7 @@ def start_process(file_name):
                     last_error = result.stderr
                 except Exception as error:
                     last_error = str(error)
+                invalidate_video_codec(codec)
                 logging.error(
                     "ERROR Saving: %s. Codec %s failed:\n%s",
                     file_name,
