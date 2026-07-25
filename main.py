@@ -140,13 +140,6 @@ def invalidate_video_codec(codec):
         _VIDEO_CODEC_CACHE = "libx264"
 
 
-class Tools:
-    @staticmethod
-    def round_down(num: float, decimals: int = 0) -> float:
-        """Round down a number to the specified number of decimal places."""
-        return math.floor(num * 10 ** decimals) / 10 ** decimals
-
-
 def probe_video(video_path):
     """Return duration, resolution, and frame rate for a video."""
     ffprobe_path = shutil.which("ffprobe")
@@ -401,7 +394,7 @@ def select_background(duration):
         )
 
     background_path, metadata = random.choice(eligible_backgrounds)
-    start_time = Tools.round_down(random.uniform(0, metadata["duration"] - duration))
+    start_time = math.floor(random.uniform(0, metadata["duration"] - duration))
     return background_path, start_time
 
 
