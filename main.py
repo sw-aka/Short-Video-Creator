@@ -390,8 +390,18 @@ def start_process(file_name):
     start_time = time.time()
     input_path = Path(INPUT_VIDEOS_DIR) / file_name
     output_path = Path(OUTPUT_VIDEOS_DIR) / file_name
+    temporary_output_path = None
 
     try:
+        output_path.unlink(missing_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{output_path.stem}.",
+            suffix=".tmp.mp4",
+            dir=output_path.parent,
+            delete=False,
+        ) as temporary_output:
+            temporary_output_path = Path(temporary_output.name)
+
         main_metadata = probe_video(input_path)
         duration = main_metadata["duration"]
         fps = main_metadata["fps"]
@@ -435,7 +445,7 @@ def start_process(file_name):
                         fps,
                         sprite_path,
                         filter_script_path,
-                        output_path,
+                        temporary_output_path,
                         codec,
                     )
                     if result.returncode == 0:
@@ -452,14 +462,18 @@ def start_process(file_name):
                 )
 
             if last_error is not None:
-                try:
-                    output_path.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as error:
-                    logging.warning("Failed to remove partial output %s: %s", output_path, error)
                 raise RuntimeError(f"Failed to save {file_name}:\n{last_error}")
+            temporary_output_path.replace(output_path)
     finally:
+        if temporary_output_path is not None:
+            try:
+                temporary_output_path.unlink(missing_ok=True)
+            except OSError as error:
+                logging.warning(
+                    "Failed to remove temporary output %s: %s",
+                    temporary_output_path,
+                    error,
+                )
         logging.info(f"Runtime: {round(time.time() - start_time, 2)} - {file_name}")
 
 
