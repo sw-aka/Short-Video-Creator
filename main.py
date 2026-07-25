@@ -480,11 +480,22 @@ if __name__ == "__main__":
             executor.submit(start_process, file_name): file_name
             for file_name in pending_videos
         }
+        failed_videos = []
         for future in concurrent.futures.as_completed(futures):
             file_name = futures[future]
             try:
                 future.result()
             except Exception:
+                failed_videos.append(file_name)
                 logging.exception(f"Worker failed: {file_name}")
+
+    if failed_videos:
+        logging.error(
+            "%d of %d videos failed: %s",
+            len(failed_videos),
+            len(pending_videos),
+            ", ".join(sorted(failed_videos)),
+        )
+        sys.exit(1)
 
     logging.info("MAIN PROCESS COMPLETE")
