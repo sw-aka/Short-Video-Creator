@@ -61,6 +61,56 @@ def list_video_files(directory):
     )
 
 
+def validate_preflight():
+    """Raise a clear error for invalid configuration or missing assets."""
+    errors = []
+    font_path = Path(FONTS_DIR) / FONT_NAME
+    if not font_path.is_file():
+        errors.append(f"Font file does not exist: {font_path}")
+
+    background_directory = Path(BACKGROUND_VIDEOS_DIR)
+    if not background_directory.is_dir():
+        errors.append(
+            f"Background video directory does not exist: {background_directory}"
+        )
+    elif not list_video_files(background_directory):
+        errors.append(f"No video files found in {background_directory}")
+
+    for name, value in (
+        ("PERCENT_MAIN_CLIP", PERCENT_MAIN_CLIP),
+        ("TEXT_POSITION_PERCENT", TEXT_POSITION_PERCENT),
+    ):
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not 0 <= value <= 100
+        ):
+            errors.append(f"{name} must be between 0 and 100")
+
+    if (
+        not isinstance(FULL_RESOLUTION, (tuple, list))
+        or len(FULL_RESOLUTION) != 2
+        or any(
+            not isinstance(dimension, int)
+            or isinstance(dimension, bool)
+            or dimension <= 0
+            or dimension % 2 != 0
+            for dimension in FULL_RESOLUTION
+        )
+    ):
+        errors.append("FULL_RESOLUTION must contain two positive even integers")
+
+    for name, value in (
+        ("MAX_NUMBER_OF_PROCESSES", MAX_NUMBER_OF_PROCESSES),
+        ("NUM_THREADS", NUM_THREADS),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            errors.append(f"{name} must be an integer of at least 1")
+
+    if errors:
+        raise ValueError("Preflight validation failed:\n- " + "\n- ".join(errors))
+
+
 _VIDEO_CODEC_CACHE = None
 _BACKGROUND_METADATA_CACHE = {}
 
@@ -175,6 +225,10 @@ def probe_video(video_path):
             width = int(video_stream["width"])
             height = int(video_stream["height"])
             video_stream_index = int(video_stream["index"])
+            has_audio = any(
+                stream.get("codec_type") == "audio"
+                for stream in metadata.get("streams", [])
+            )
             if fps <= 0:
                 raise ValueError("frame rate must be positive")
         except (KeyError, StopIteration, TypeError, ValueError, ZeroDivisionError) as error:
@@ -186,6 +240,7 @@ def probe_video(video_path):
             "height": height,
             "fps": fps,
             "video_stream_index": video_stream_index,
+            "has_audio": has_audio,
         }
 
     result = subprocess.run(
@@ -209,6 +264,10 @@ def probe_video(video_path):
             and "attached pic" not in line.lower()
         ),
         "",
+    )
+    has_audio = any(
+        "Stream #" in line and "Audio:" in line
+        for line in probe_text.splitlines()
     )
     stream_index_match = re.search(r"Stream\s+#\d+:(\d+)", video_line)
     resolution_match = re.search(r"(?<!\d)(\d{2,5})x(\d{2,5})(?!\d)", video_line)
@@ -238,6 +297,7 @@ def probe_video(video_path):
         "height": int(resolution_match.group(2)),
         "fps": Fraction(fps_match.group(1)),
         "video_stream_index": int(stream_index_match.group(1)),
+        "has_audio": has_audio,
     }
 
 
@@ -502,6 +562,8 @@ def start_process(file_name):
             temporary_output_path = Path(temporary_output.name)
 
         main_metadata = probe_video(input_path)
+        if not main_metadata["has_audio"]:
+            raise ValueError(f"{file_name}: no audio stream")
         duration = main_metadata["duration"]
         fps = main_metadata["fps"]
         background_path, background_start = select_background(duration)
@@ -576,6 +638,12 @@ if __name__ == "__main__":
     configure_logging()
     Path(INPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
     Path(OUTPUT_VIDEOS_DIR).mkdir(parents=True, exist_ok=True)
+
+    try:
+        validate_preflight()
+    except ValueError as error:
+        logging.error("%s", error)
+        sys.exit(1)
 
     # Only the parent process reads this list, avoiding a queue feeder startup race.
     pending_videos = list_video_files(INPUT_VIDEOS_DIR)
