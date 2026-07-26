@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 ## Model settings
 MODEL_NAME = 'nemo-parakeet-tdt-0.6b-v3'
 QUANTIZATION = 'int8'
@@ -20,7 +23,8 @@ VIDEO_CODEC = None # Video encoder override; None automatically selects an avail
 VIDEO_BITRATE = '8M' # Explicit bitrate used to maintain output video quality
 
 ## Source folders
-INPUT_VIDEOS_DIR = 'INPUT_VIDEOS' # Directory of the input videos
-OUTPUT_VIDEOS_DIR = 'OUTPUT_VIDEOS' # Directory the editted videos will be saved
-BACKGROUND_VIDEOS_DIR = 'BACKGROUND_VIDEOS' # Directory of the background videos
-FONTS_DIR = 'FONTS' # Directory the fonts are stored in
+PROJECT_ROOT = Path(__file__).resolve().parent
+INPUT_VIDEOS_DIR = PROJECT_ROOT / 'INPUT_VIDEOS' # Directory of the input videos
+OUTPUT_VIDEOS_DIR = PROJECT_ROOT / 'OUTPUT_VIDEOS' # Directory the editted videos will be saved
+BACKGROUND_VIDEOS_DIR = PROJECT_ROOT / 'BACKGROUND_VIDEOS' # Directory of the background videos
+FONTS_DIR = PROJECT_ROOT / 'FONTS' # Directory the fonts are stored in
