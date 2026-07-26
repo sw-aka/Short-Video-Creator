@@ -95,18 +95,7 @@ def validate_preflight():
     except Exception as error:
         errors.append(f"Unable to inspect ffmpeg filters: {error}")
 
-    for name, value in (
-        ("PERCENT_MAIN_CLIP", PERCENT_MAIN_CLIP),
-        ("TEXT_POSITION_PERCENT", TEXT_POSITION_PERCENT),
-    ):
-        if (
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
-            or not 0 <= value <= 100
-        ):
-            errors.append(f"{name} must be between 0 and 100")
-
-    if (
+    resolution_is_valid = not (
         not isinstance(FULL_RESOLUTION, (tuple, list))
         or len(FULL_RESOLUTION) != 2
         or any(
@@ -116,8 +105,31 @@ def validate_preflight():
             or dimension % 2 != 0
             for dimension in FULL_RESOLUTION
         )
-    ):
+    )
+    if not resolution_is_valid:
         errors.append("FULL_RESOLUTION must contain two positive even integers")
+
+    main_percent_is_valid = (
+        isinstance(PERCENT_MAIN_CLIP, (int, float))
+        and not isinstance(PERCENT_MAIN_CLIP, bool)
+        and 0 < PERCENT_MAIN_CLIP < 100
+    )
+    if not main_percent_is_valid:
+        errors.append("PERCENT_MAIN_CLIP must be greater than 0 and less than 100")
+    elif resolution_is_valid:
+        main_height = round(FULL_RESOLUTION[1] * (PERCENT_MAIN_CLIP / 100))
+        background_height = FULL_RESOLUTION[1] - main_height
+        if main_height < 2 or background_height < 2:
+            errors.append(
+                "PERCENT_MAIN_CLIP must produce main and background heights of at least 2"
+            )
+
+    if (
+        not isinstance(TEXT_POSITION_PERCENT, (int, float))
+        or isinstance(TEXT_POSITION_PERCENT, bool)
+        or not 0 <= TEXT_POSITION_PERCENT <= 100
+    ):
+        errors.append("TEXT_POSITION_PERCENT must be between 0 and 100")
 
     for name, value in (
         ("MAX_NUMBER_OF_PROCESSES", MAX_NUMBER_OF_PROCESSES),
@@ -328,11 +340,23 @@ def group_caption_segments(timestamps, clip_duration):
     segments = []
     previous_time = 0
     queued_texts = []
+    queued_end = None
     full_start = None
 
     for pos, timestamp in enumerate(timestamps):
         start, end = timestamp["timestamp"]
         text = timestamp["text"]
+
+        if start >= clip_duration:
+            if queued_texts and full_start is not None:
+                segments.append(
+                    (
+                        full_start,
+                        min(queued_end, clip_duration),
+                        " ".join(queued_texts),
+                    )
+                )
+            break
 
         if pos + 1 < len(timestamps):
             next_timestamp_start = timestamps[pos + 1]["timestamp"][0]
@@ -343,11 +367,13 @@ def group_caption_segments(timestamps, clip_duration):
             if full_start is None:
                 full_start = start
             queued_texts.append(text)
+            queued_end = end
             continue
 
         queued_texts.append(text)
         text = " ".join(queued_texts)
         queued_texts = []
+        queued_end = None
 
         if full_start is None:
             full_start = start
