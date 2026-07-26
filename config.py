@@ -4,7 +4,6 @@ from pathlib import Path
 ## Model settings
 MODEL_NAME = 'nemo-parakeet-tdt-0.6b-v3'
 QUANTIZATION = 'int8'
-LANGUAGE = 'en'
 
 ## Processing settings
 MAX_NUMBER_OF_PROCESSES = 1 # The maximum number of videos which can be processed simultaneously
