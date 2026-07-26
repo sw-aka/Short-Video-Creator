@@ -1,5 +1,5 @@
 # AI Short Video Creator 
-Tool to automatically create short clips with a baground video and AI-generated captions.
+Tool to automatically create short clips with a background video and AI-generated captions.
 Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 
 **No API keys** are required, the videos are processed locally on your computer.
@@ -21,7 +21,7 @@ Can be used for YouTube Shorts, TikTok, Instagram Reels, Snapchat Spotlight.
 
 ## Requirements
 - Python >=3.11 - [Download Here](https://www.python.org/downloads)
-- FFmpeg - [Download Here](https://ffmpeg.org/download.html)
+- FFmpeg is bundled through `imageio-ffmpeg`, so a separate installation is not required. A full system [FFmpeg](https://ffmpeg.org/download.html) installation is optional; its `ffprobe` improves media probing when available.
 
 Captions are transcribed locally with NVIDIA's
 [Parakeet TDT 0.6B v3](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx)
@@ -42,13 +42,14 @@ downloaded automatically from Hugging Face on first run and cached locally.
  ```
 
 ## Usage
-1. Move MP4 main videos into ```INPUT_VIDEOS```
-2. Move MP4 background videos into ```BACKGROUND_VIDEOS```
+1. Move main videos (`.mp4`, `.mov`, `.mkv`, `.avi`, or `.webm`) into ```INPUT_VIDEOS```
+2. Move background videos in any of those formats into ```BACKGROUND_VIDEOS```
 3. Run ```main.py```:
  ```bash
  python main.py
  ```
-4. The editted videos are saved in ```OUTPUT_VIDEOS```
+4. The edited videos are saved in ```OUTPUT_VIDEOS```
+5. If any video fails to process, the tool prints a failure summary and exits with a nonzero status.
 
 ### Optional
 You can edit the settings in ```config.py```.
