@@ -76,6 +76,25 @@ def validate_preflight():
     elif not list_video_files(background_directory):
         errors.append(f"No video files found in {background_directory}")
 
+    try:
+        ffmpeg_path = Path(imageio_ffmpeg.get_ffmpeg_exe()).resolve()
+        filter_result = subprocess.run(
+            [os.fspath(ffmpeg_path), "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if filter_result.returncode != 0:
+            details = filter_result.stderr.strip() or f"exit code {filter_result.returncode}"
+            errors.append(f"Unable to inspect ffmpeg filters: {details}")
+        elif not any(
+            len(parts := line.split()) >= 2 and parts[1] == "subtitles"
+            for line in filter_result.stdout.splitlines()
+        ):
+            errors.append("ffmpeg does not provide the required subtitles filter")
+    except Exception as error:
+        errors.append(f"Unable to inspect ffmpeg filters: {error}")
+
     for name, value in (
         ("PERCENT_MAIN_CLIP", PERCENT_MAIN_CLIP),
         ("TEXT_POSITION_PERCENT", TEXT_POSITION_PERCENT),
@@ -354,7 +373,7 @@ def format_ass_timestamp(seconds):
 def escape_ass_text(text):
     """Escape text that libass would otherwise interpret as markup."""
     return (
-        text.replace("\\", r"\\")
+        text.replace("\\", " ")
         .replace("{", r"\{")
         .replace("}", r"\}")
         .replace("\r\n", r"\N")
@@ -363,9 +382,8 @@ def escape_ass_text(text):
     )
 
 
-def write_ass_captions(caption_segments, subtitle_path):
+def write_ass_captions(caption_segments, subtitle_path, font_path):
     """Write timed captions using the configured font and placement."""
-    font_path = Path(FONTS_DIR) / FONT_NAME
     font_family = ImageFont.truetype(font_path, FONT_SIZE).getname()[0]
     margin_vertical = round(FULL_RESOLUTION[1] * (TEXT_POSITION_PERCENT / 100))
     lines = [
@@ -400,15 +418,6 @@ def write_ass_captions(caption_segments, subtitle_path):
     subtitle_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def escape_filter_path(path):
-    """Escape a path for use as a quoted ffmpeg filter option."""
-    return (
-        Path(path).resolve().as_posix()
-        .replace(":", r"\:")
-        .replace("'", r"\'")
-    )
-
-
 def extract_audio(input_path, audio_path):
     """Extract the main audio as a 16 kHz mono PCM WAV for ASR."""
     command = [
@@ -440,7 +449,7 @@ def select_background(duration):
     """Select a random background and a whole-second start offset."""
     eligible_backgrounds = []
     for background_name in list_video_files(BACKGROUND_VIDEOS_DIR):
-        background_path = Path(BACKGROUND_VIDEOS_DIR) / background_name
+        background_path = (Path(BACKGROUND_VIDEOS_DIR) / background_name).resolve()
         metadata = _BACKGROUND_METADATA_CACHE.get(background_path)
         if metadata is None:
             metadata = probe_video(background_path)
@@ -458,7 +467,7 @@ def select_background(duration):
     return background_path, start_time
 
 
-def build_filter_complex(fps, video_stream_index, subtitle_path):
+def build_filter_complex(fps, video_stream_index):
     """Build the stacked-video and ASS-caption ffmpeg filter graph."""
     main_height = round(FULL_RESOLUTION[1] * (PERCENT_MAIN_CLIP / 100))
     background_height = FULL_RESOLUTION[1] - main_height
@@ -476,10 +485,7 @@ def build_filter_complex(fps, video_stream_index, subtitle_path):
             height=background_height,
         ),
         "[main][background]vstack=inputs=2[stacked]",
-        "[stacked]subtitles=filename='{subtitle}':fontsdir='{fonts}'[output]".format(
-            subtitle=escape_filter_path(subtitle_path),
-            fonts=escape_filter_path(FONTS_DIR),
-        ),
+        "[stacked]subtitles=filename=captions.ass:fontsdir=.[output]",
     ]
     return ";".join(filters)
 
@@ -489,14 +495,14 @@ def render_video(
     background_path,
     background_start,
     duration,
-    fps,
     filter_script_path,
     output_path,
     codec,
+    working_directory,
 ):
     """Render a complete output with one ffmpeg invocation."""
     command = [
-        imageio_ffmpeg.get_ffmpeg_exe(),
+        os.fspath(Path(imageio_ffmpeg.get_ffmpeg_exe()).resolve()),
         "-nostdin",
         "-hide_banner",
         "-loglevel",
@@ -539,6 +545,7 @@ def render_video(
         capture_output=True,
         text=True,
         timeout=max(120, duration * 10),
+        cwd=os.fspath(working_directory),
     )
 
 
@@ -547,8 +554,8 @@ def start_process(file_name):
     configure_logging()
     logging.info(f"Processing: {file_name}")
     start_time = time.time()
-    input_path = Path(INPUT_VIDEOS_DIR) / file_name
-    output_path = Path(OUTPUT_VIDEOS_DIR) / file_name
+    input_path = (Path(INPUT_VIDEOS_DIR) / file_name).resolve()
+    output_path = (Path(OUTPUT_VIDEOS_DIR) / file_name).resolve()
     temporary_output_path = None
 
     try:
@@ -570,18 +577,19 @@ def start_process(file_name):
         render_duration = float(math.floor(Fraction(str(duration)) * fps) / fps)
 
         with tempfile.TemporaryDirectory(prefix="svc-") as temporary_directory:
-            temporary_path = Path(temporary_directory)
+            temporary_path = Path(temporary_directory).resolve()
             audio_path = temporary_path / "audio.wav"
             subtitle_path = temporary_path / "captions.ass"
             filter_script_path = temporary_path / "filters.txt"
+            font_path = (Path(FONTS_DIR) / FONT_NAME).resolve()
+            shutil.copy2(font_path, temporary_path / f"caption-font{font_path.suffix}")
             extract_audio(input_path, audio_path)
             timestamps = transcriber.transcribe_words(os.fspath(audio_path))
             caption_segments = group_caption_segments(timestamps, duration)
-            write_ass_captions(caption_segments, subtitle_path)
+            write_ass_captions(caption_segments, subtitle_path, font_path)
             filter_complex = build_filter_complex(
                 fps,
                 main_metadata["video_stream_index"],
-                subtitle_path,
             )
             filter_script_path.write_text(filter_complex, encoding="utf-8")
 
@@ -599,10 +607,10 @@ def start_process(file_name):
                         background_path,
                         background_start,
                         render_duration,
-                        fps,
                         filter_script_path,
                         temporary_output_path,
                         codec,
+                        temporary_path,
                     )
                     if result.returncode == 0:
                         last_error = None
