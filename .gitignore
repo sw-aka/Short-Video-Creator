@@ -1,3 +1,5 @@
-/__pycache__
+__pycache__/
+.pytest_cache/
+.ruff_cache/
 /INPUT_VIDEOS
 /OUTPUT_VIDEOS
