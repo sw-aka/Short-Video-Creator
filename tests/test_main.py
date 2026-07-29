@@ -28,17 +28,17 @@ def configure_valid_preflight(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "FONTS_DIR", fonts)
     monkeypatch.setattr(main, "FONT_NAME", "font.ttf")
     monkeypatch.setattr(main, "BACKGROUND_VIDEOS_DIR", backgrounds)
-    monkeypatch.setattr(
-        main,
-        "list_video_files",
-        lambda directory: ["background.mp4"],
-    )
     monkeypatch.setattr(main.imageio_ffmpeg, "get_ffmpeg_exe", lambda: "ffmpeg")
     monkeypatch.setattr(
         main.subprocess,
         "run",
         lambda *args, **kwargs: successful_run(" .. subtitles       Render text\n"),
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_video_codec_cache(monkeypatch):
+    monkeypatch.setattr(main, "_VIDEO_CODEC_CACHE", None)
 
 
 def test_group_caption_segments_merges_queued_short_words():
@@ -259,6 +259,158 @@ def test_validate_preflight_reports_missing_font(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="Font file does not exist"):
         main.validate_preflight()
+
+
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        "1080x1920",
+        (1080,),
+        (1080.0, 1920),
+        (True, 1920),
+        (1080, 1919),
+        (0, 1920),
+        (-2, 1920),
+    ],
+)
+def test_validate_preflight_rejects_invalid_resolution(monkeypatch, tmp_path, resolution):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "FULL_RESOLUTION", resolution)
+
+    with pytest.raises(ValueError, match="two positive even integers"):
+        main.validate_preflight()
+
+
+@pytest.mark.parametrize("value", [-1, 101])
+def test_validate_preflight_rejects_text_position_bounds(monkeypatch, tmp_path, value):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "TEXT_POSITION_PERCENT", value)
+
+    with pytest.raises(ValueError, match="TEXT_POSITION_PERCENT must be between 0 and 100"):
+        main.validate_preflight()
+
+
+@pytest.mark.parametrize("name", ["MAX_NUMBER_OF_PROCESSES", "NUM_THREADS"])
+def test_validate_preflight_rejects_nonpositive_worker_counts(monkeypatch, tmp_path, name):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, name, 0)
+
+    with pytest.raises(ValueError, match=rf"{name} must be an integer of at least 1"):
+        main.validate_preflight()
+
+
+def test_validate_preflight_reports_missing_background_directory(monkeypatch, tmp_path):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    missing_directory = tmp_path / "missing-backgrounds"
+    monkeypatch.setattr(main, "BACKGROUND_VIDEOS_DIR", missing_directory)
+
+    with pytest.raises(ValueError, match="Background video directory does not exist"):
+        main.validate_preflight()
+
+
+def test_validate_preflight_reports_empty_background_directory(monkeypatch, tmp_path):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    empty_directory = tmp_path / "empty-backgrounds"
+    empty_directory.mkdir()
+    monkeypatch.setattr(main, "BACKGROUND_VIDEOS_DIR", empty_directory)
+
+    with pytest.raises(ValueError, match="No video files found"):
+        main.validate_preflight()
+
+
+def test_validate_preflight_reports_ffmpeg_filter_probe_failure(monkeypatch, tmp_path):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess([], 1, "", "probe failed"),
+    )
+
+    with pytest.raises(ValueError, match="Unable to inspect ffmpeg filters: probe failed"):
+        main.validate_preflight()
+
+
+def test_validate_preflight_requires_subtitles_filter(monkeypatch, tmp_path):
+    configure_valid_preflight(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda *args, **kwargs: successful_run(" V->A volume Adjust volume\n"),
+    )
+
+    with pytest.raises(ValueError, match="required subtitles filter"):
+        main.validate_preflight()
+
+
+def test_select_video_codec_returns_configured_override(monkeypatch):
+    monkeypatch.setattr(main, "VIDEO_CODEC", "configured_codec")
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("configured codec should not invoke ffmpeg")
+
+    monkeypatch.setattr(main.subprocess, "run", unexpected_run)
+
+    assert main.select_video_codec() == "configured_codec"
+    assert main.select_video_codec() == "configured_codec"
+
+
+def test_select_video_codec_caches_successful_hardware_candidate(monkeypatch):
+    monkeypatch.setattr(main, "VIDEO_CODEC", None)
+    monkeypatch.setattr(main.sys, "platform", "linux")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if "-encoders" in command:
+            return successful_run(" V..... h264_nvenc NVIDIA encoder\n")
+        return successful_run()
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    assert main.select_video_codec() == "h264_nvenc"
+    assert main.select_video_codec() == "h264_nvenc"
+    assert len(commands) == 2
+    assert "color=size=64x64:duration=0.1" in commands[1]
+
+
+def test_select_video_codec_falls_back_when_test_encodes_fail(monkeypatch):
+    monkeypatch.setattr(main, "VIDEO_CODEC", None)
+    monkeypatch.setattr(main.sys, "platform", "linux")
+    tested_codecs = []
+
+    def fake_run(command, **kwargs):
+        if "-encoders" in command:
+            return successful_run(
+                " V..... h264_nvenc NVIDIA encoder\n V..... h264_qsv Intel encoder\n"
+            )
+        tested_codecs.append(command[command.index("-c:v") + 1])
+        return subprocess.CompletedProcess(command, 1, "", "encode failed")
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    assert main.select_video_codec() == "libx264"
+    assert tested_codecs == ["h264_nvenc", "h264_qsv"]
+
+
+def test_invalidate_video_codec_switches_cached_hardware_codec(monkeypatch):
+    monkeypatch.setattr(main, "VIDEO_CODEC", None)
+    monkeypatch.setattr(main.sys, "platform", "darwin")
+    call_count = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if "-encoders" in command:
+            return successful_run(" V..... h264_videotoolbox VideoToolbox encoder\n")
+        return successful_run()
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    assert main.select_video_codec() == "h264_videotoolbox"
+    main.invalidate_video_codec("h264_videotoolbox")
+
+    assert main.select_video_codec() == "libx264"
+    assert call_count == 2
 
 
 def test_start_process_retries_software_codec_and_invalidates_failure(
