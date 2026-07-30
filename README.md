@@ -36,23 +36,42 @@ downloaded automatically from Hugging Face on first run and cached locally.
  git clone https://github.com/sw-aka/Short-Video-Creator.git
 ```
 
-2. Install dependencies:
+2. Install the package:
 ```bash
- pip install -r requirements.txt
- ```
+ pip install -e .
+```
 
 ## Usage
 1. Move main videos (`.mp4`, `.mov`, `.mkv`, `.avi`, or `.webm`) into ```INPUT_VIDEOS```
 2. Move background videos in any of those formats into ```BACKGROUND_VIDEOS```
-3. Run ```main.py```:
+3. Run the CLI:
  ```bash
- python main.py
+ svc
  ```
 4. The edited videos are saved in ```OUTPUT_VIDEOS```
 5. If any video fails to process, the tool prints a failure summary and exits with a nonzero status.
 
-### Optional
-You can edit the settings in ```config.py```.
+The compatibility command `python main.py` and `python -m short_video_creator`
+provide the same folder-batch workflow. Directory defaults are relative to the
+current working directory and can be changed with `--input-dir`, `--output-dir`,
+`--backgrounds-dir`, and `--processes`.
+
+### Library API
+
+```python
+from short_video_creator import Settings, create_short
+
+output = create_short(
+    input_video="clip.mp4",
+    output_path="out/short.mp4",
+    backgrounds_dir="backgrounds",
+    settings=Settings(font_size=120),
+)
+```
+
+`create_short` returns the output `Path`. Catch `ShortVideoError` or one of its
+exported subclasses to handle per-clip failures. The default caption font is
+bundled; pass `Settings(font_path=Path("font.ttf"))` to use a custom font.
 
 
 ## Contributing
